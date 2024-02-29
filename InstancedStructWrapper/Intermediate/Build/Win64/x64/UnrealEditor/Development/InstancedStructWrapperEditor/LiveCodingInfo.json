@@ -1,9 +1,0 @@
-{
-	"RemapUnityFiles": 
-	{
-		"Module.InstancedStructWrapperEditor.cpp.obj": [
-			"InstancedStructWrapperDetails.cpp.obj",
-			"InstancedStructWrapperEditorModule.cpp.obj"
-		]
-	}
-}

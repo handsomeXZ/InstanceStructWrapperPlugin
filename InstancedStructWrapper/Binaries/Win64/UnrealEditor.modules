@@ -1,8 +1,0 @@
-{
-	"BuildId": "8f3d9392-71e8-4560-b653-2b0480b4c9f0",
-	"Modules": 
-	{
-		"InstancedStructWrapper": "UnrealEditor-InstancedStructWrapper.dll",
-		"InstancedStructWrapperEditor": "UnrealEditor-InstancedStructWrapperEditor.dll"
-	}
-}
