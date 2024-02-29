@@ -1,0 +1,35 @@
+{
+    "Version": "1.2",
+    "Data": {
+        "Source": "e:\\ue4\\ue5_project\\5.3\\project\\plugins\\instancedstructwrapper\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\instancedstructwrappereditor\\module.instancedstructwrappereditor.cpp",
+        "ProvidedModule": "",
+        "PCH": "e:\\ue4\\unrealenginesource\\unrealengine\\engine\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\unrealed\\sharedpch.unrealed.cpp20.h.pch",
+        "Includes": [
+            "e:\\ue4\\ue5_project\\5.3\\project\\plugins\\instancedstructwrapper\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\instancedstructwrappereditor\\definitions.instancedstructwrappereditor.h",
+            "e:\\ue4\\ue5_project\\5.3\\project\\plugins\\instancedstructwrapper\\source\\instancedstructwrappereditor\\private\\instancedstructwrapperdetails.cpp",
+            "e:\\ue4\\ue5_project\\5.3\\project\\plugins\\instancedstructwrapper\\source\\instancedstructwrappereditor\\public\\instancedstructwrapperdetails.h",
+            "e:\\ue4\\unrealenginesource\\unrealengine\\engine\\source\\editor\\propertyeditor\\public\\idetailcustomnodebuilder.h",
+            "e:\\ue4\\unrealenginesource\\unrealengine\\engine\\plugins\\experimental\\structutils\\source\\structutilseditor\\public\\instancedstructdetails.h",
+            "e:\\ue4\\ue5_project\\5.3\\project\\plugins\\instancedstructwrapper\\source\\instancedstructwrapper\\public\\instancedstructwrapper.h",
+            "e:\\ue4\\unrealenginesource\\unrealengine\\engine\\plugins\\experimental\\structutils\\source\\structutils\\public\\instancedstruct.h",
+            "e:\\ue4\\unrealenginesource\\unrealengine\\engine\\plugins\\experimental\\structutils\\source\\structutils\\public\\structutils.h",
+            "e:\\ue4\\unrealenginesource\\unrealengine\\engine\\plugins\\experimental\\structutils\\intermediate\\build\\win64\\unrealeditor\\inc\\structutils\\uht\\instancedstruct.generated.h",
+            "e:\\ue4\\ue5_project\\5.3\\project\\plugins\\instancedstructwrapper\\intermediate\\build\\win64\\unrealeditor\\inc\\instancedstructwrapper\\uht\\instancedstructwrapper.generated.h",
+            "e:\\ue4\\unrealenginesource\\unrealengine\\engine\\source\\editor\\propertyeditor\\public\\idetailchildrenbuilder.h",
+            "e:\\ue4\\unrealenginesource\\unrealengine\\engine\\source\\editor\\propertyeditor\\public\\detailbuildertypes.h",
+            "e:\\ue4\\unrealenginesource\\unrealengine\\engine\\source\\editor\\propertyeditor\\public\\detailwidgetrow.h",
+            "e:\\ue4\\unrealenginesource\\unrealengine\\engine\\source\\editor\\propertyeditor\\public\\idetailpropertyrow.h",
+            "e:\\ue4\\unrealenginesource\\unrealengine\\engine\\source\\editor\\propertyeditor\\public\\detailcategorybuilder.h",
+            "e:\\ue4\\unrealenginesource\\unrealengine\\engine\\source\\editor\\propertyeditor\\public\\propertyeditorcopypaste.h",
+            "e:\\ue4\\unrealenginesource\\unrealengine\\engine\\source\\runtime\\slate\\public\\widgets\\text\\sinlineeditabletextblock.h",
+            "e:\\ue4\\unrealenginesource\\unrealengine\\engine\\source\\editor\\propertyeditor\\public\\detaillayoutbuilder.h",
+            "e:\\ue4\\unrealenginesource\\unrealengine\\engine\\plugins\\experimental\\structutils\\source\\structutilsengine\\public\\structutilsdelegates.h",
+            "e:\\ue4\\unrealenginesource\\unrealengine\\engine\\source\\editor\\propertyeditor\\public\\istructuredataprovider.h",
+            "e:\\ue4\\ue5_project\\5.3\\project\\plugins\\instancedstructwrapper\\source\\instancedstructwrappereditor\\private\\instancedstructwrappereditormodule.cpp",
+            "e:\\ue4\\ue5_project\\5.3\\project\\plugins\\instancedstructwrapper\\source\\instancedstructwrappereditor\\public\\instancedstructwrappereditormodule.h",
+            "e:\\ue4\\unrealenginesource\\unrealengine\\engine\\source\\developer\\assettools\\public\\assettypecategories.h"
+        ],
+        "ImportedModules": [],
+        "ImportedHeaderUnits": []
+    }
+}
