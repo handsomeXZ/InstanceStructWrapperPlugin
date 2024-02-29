@@ -39,12 +39,3 @@ struct TStructOpsTypeTraits<FInstancedStructWrapper> : public TStructOpsTypeTrai
 		WithFindInnerPropertyInstance = true,
 	};
 };
-
-UCLASS(BlueprintType, Blueprintable)
-class UInstancedStructTest : public UObject
-{
-	GENERATED_BODY()
-public:
-	UPROPERTY(EditAnywhere, meta = (ExcludeBaseStruct, BaseStruct = "/Script/Chooser.ChooserParameterObjectBase"))
-	FInstancedStructWrapper Test;
-};

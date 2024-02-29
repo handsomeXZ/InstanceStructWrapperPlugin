@@ -8,9 +8,8 @@
 #include "Widgets/Text/SInlineEditableTextBlock.h"
 #include "DetailLayoutBuilder.h"
 
-#include "StructUtilsDelegates.h"
-#include "IStructureDataProvider.h"
-
+#include "PropertyNode.h"
+#include "PropertyHandleImpl.h"
 
 #define LOCTEXT_NAMESPACE "InstancedStructWrapperDetails"
 
@@ -41,180 +40,42 @@ PRIVATE_DEFINE(FSlotBase, TSharedRef<SWidget>, Widget);
 PRIVATE_DEFINE(SBoxPanel, TPanelChildren<SBoxPanel::FSlot>, Children, 1);
 PRIVATE_DEFINE(TPanelChildren<SBoxPanel::FSlot>, TArray<TUniquePtr<SBoxPanel::FSlot>>, Children, 2);
 
+PRIVATE_DEFINE(FPropertyNode, TWeakFieldPtr<FProperty>, Property);
 
-class FInstancedStructProvider : public IStructureDataProvider
+FPropertyAccess::Result GetStructData(TSharedPtr<IPropertyHandle> StructProperty, const UScriptStruct*& OutCommonStruct, FInstancedStructWrapper*& OutInstancedStructWrapper)
 {
-public:
-	FInstancedStructProvider() = default;
+	bool bHasResult = false;
+	bool bHasMultipleValues = false;
 
-	explicit FInstancedStructProvider(const TSharedPtr<IPropertyHandle>& InStructProperty)
-		: StructProperty(InStructProperty)
-	{
-	}
-
-	virtual ~FInstancedStructProvider() override {}
-
-	void Reset()
-	{
-		StructProperty = nullptr;
-	}
-
-	virtual bool IsValid() const override
-	{
-		bool bHasValidData = false;
-		EnumerateInstances([&bHasValidData](const UScriptStruct* ScriptStruct, uint8* Memory, UPackage* Package)
-			{
-				if (ScriptStruct && Memory)
-				{
-					bHasValidData = true;
-					return false; // Stop
-				}
-				return true; // Continue
-			});
-
-		return bHasValidData;
-	}
-
-	virtual const UStruct* GetBaseStructure() const override
-	{
-		// Taken from UClass::FindCommonBase
-		auto FindCommonBaseStruct = [](const UScriptStruct* StructA, const UScriptStruct* StructB)
-			{
-				const UScriptStruct* CommonBaseStruct = StructA;
-				while (CommonBaseStruct && StructB && !StructB->IsChildOf(CommonBaseStruct))
-				{
-					CommonBaseStruct = Cast<UScriptStruct>(CommonBaseStruct->GetSuperStruct());
-				}
-				return CommonBaseStruct;
-			};
-
-		const UScriptStruct* CommonStruct = nullptr;
-		EnumerateInstances([&CommonStruct, &FindCommonBaseStruct](const UScriptStruct* ScriptStruct, uint8* Memory, UPackage* Package)
-			{
-				if (ScriptStruct)
-				{
-					CommonStruct = FindCommonBaseStruct(ScriptStruct, CommonStruct);
-				}
-				return true; // Continue
-			});
-
-		return CommonStruct;
-	}
-
-	virtual void GetInstances(TArray<TSharedPtr<FStructOnScope>>& OutInstances) const override
-	{
-		// The returned instances need to be compatible with base structure.
-		// This function returns empty instances in case they are not compatible, with the idea that we have as many instances as we have outer objects.
-		const UScriptStruct* CommonStruct = Cast<UScriptStruct>(GetBaseStructure());
-		EnumerateInstances([&OutInstances, CommonStruct](const UScriptStruct* ScriptStruct, uint8* Memory, UPackage* Package)
-			{
-				TSharedPtr<FStructOnScope> Result;
-
-				if (CommonStruct && ScriptStruct && ScriptStruct->IsChildOf(CommonStruct))
-				{
-					Result = MakeShared<FStructOnScope>(ScriptStruct, Memory);
-					Result->SetPackage(Package);
-				}
-
-				OutInstances.Add(Result);
-
-				return true; // Continue
-			});
-	}
-
-	virtual bool IsPropertyIndirection() const override
-	{
-		return true;
-	}
-
-	virtual uint8* GetValueBaseAddress(uint8* ParentValueAddress, const UStruct* ExpectedType) const override
-	{
-		if (!ParentValueAddress)
+	StructProperty->EnumerateRawData([&OutCommonStruct, &bHasResult, &bHasMultipleValues, &OutInstancedStructWrapper](void* RawData, const int32 /*DataIndex*/, const int32 /*NumDatas*/)
 		{
-			return nullptr;
-		}
-
-		FInstancedStruct& InstancedStruct = *reinterpret_cast<FInstancedStruct*>(ParentValueAddress);
-		if (ExpectedType && InstancedStruct.GetScriptStruct() && InstancedStruct.GetScriptStruct()->IsChildOf(ExpectedType))
-		{
-			return InstancedStruct.GetMutableMemory();
-		}
-
-		return nullptr;
-	}
-
-protected:
-
-	void EnumerateInstances(TFunctionRef<bool(const UScriptStruct* ScriptStruct, uint8* Memory, UPackage* Package)> InFunc) const
-	{
-		if (!StructProperty.IsValid())
-		{
-			return;
-		}
-
-		TArray<UPackage*> Packages;
-		StructProperty->GetOuterPackages(Packages);
-
-		StructProperty->EnumerateRawData([&InFunc, &Packages](void* RawData, const int32 DataIndex, const int32 /*NumDatas*/)
+			if (FInstancedStructWrapper* InstancedStruct = static_cast<FInstancedStructWrapper*>(RawData))
 			{
-				const UScriptStruct* ScriptStruct = nullptr;
-				uint8* Memory = nullptr;
-				UPackage* Package = nullptr;
-				if (FInstancedStruct* InstancedStruct = static_cast<FInstancedStruct*>(RawData))
+				const UScriptStruct* Struct = InstancedStruct->GetScriptStruct();
+
+				if (!bHasResult)
 				{
-					ScriptStruct = InstancedStruct->GetScriptStruct();
-					Memory = InstancedStruct->GetMutableMemory();
-					if (ensureMsgf(Packages.IsValidIndex(DataIndex), TEXT("Expecting packges and raw data to match.")))
-					{
-						Package = Packages[DataIndex];
-					}
+					OutCommonStruct = Struct;
+					OutInstancedStructWrapper = InstancedStruct;
+				}
+				else if (OutCommonStruct != Struct)
+				{
+					bHasMultipleValues = true;
 				}
 
-				return InFunc(ScriptStruct, Memory, Package);
-			});
-	}
+				bHasResult = true;
+			}
 
-	TSharedPtr<IPropertyHandle> StructProperty;
-};
-namespace UE::StructUtils::Private
-{
-
-	FPropertyAccess::Result GetStruct(TSharedPtr<IPropertyHandle> StructProperty, const UScriptStruct*& OutCommonStruct, FInstancedStructWrapper*& OutInstancedStructWrapper)
-	{
-		bool bHasResult = false;
-		bool bHasMultipleValues = false;
-
-		StructProperty->EnumerateRawData([&OutCommonStruct, &bHasResult, &bHasMultipleValues, &OutInstancedStructWrapper](void* RawData, const int32 /*DataIndex*/, const int32 /*NumDatas*/)
-			{
-				if (FInstancedStructWrapper* InstancedStruct = static_cast<FInstancedStructWrapper*>(RawData))
-				{
-					const UScriptStruct* Struct = InstancedStruct->GetScriptStruct();
-
-					if (!bHasResult)
-					{
-						OutCommonStruct = Struct;
-						OutInstancedStructWrapper = InstancedStruct;
-					}
-					else if (OutCommonStruct != Struct)
-					{
-						bHasMultipleValues = true;
-					}
-
-					bHasResult = true;
-				}
-
-				return true;
+			return true;
 		});
 
-		if (bHasMultipleValues)
-		{
-			return FPropertyAccess::MultipleValues;
-		}
-
-		return bHasResult ? FPropertyAccess::Success : FPropertyAccess::Fail;
+	if (bHasMultipleValues)
+	{
+		return FPropertyAccess::MultipleValues;
 	}
 
-} // UE::StructUtils::Private
+	return bHasResult ? FPropertyAccess::Success : FPropertyAccess::Fail;
+}
 
 TSharedRef<IPropertyTypeCustomization> FInstancedStructWrapperDetails::MakeInstance()
 {
@@ -263,7 +124,27 @@ void FInstancedStructWrapperDetails::CustomizeHeader(TSharedRef<IPropertyHandle>
 
 void FInstancedStructWrapperDetails::CustomizeChildren(TSharedRef<class IPropertyHandle> StructPropertyHandle, class IDetailChildrenBuilder& StructBuilder, IPropertyTypeCustomizationUtils& StructCustomizationUtils)
 {
-	TSharedRef<FInstancedStructWrapperDataDetails> DataDetails = MakeShared<FInstancedStructWrapperDataDetails>(StructProperty);
+	FInstancedStructWrapper* Wrapper = nullptr;
+	const UScriptStruct* CommonStruct = nullptr;
+	FProperty* Property = StructPropertyHandle->GetProperty();
+	const FPropertyAccess::Result Result = GetStructData(StructPropertyHandle, CommonStruct, Wrapper);
+
+	TSharedPtr<FStructOnScope> StructOnScope = MakeShared<FStructOnScope>(nullptr, nullptr);
+	TArray<TSharedPtr<IPropertyHandle>> ChildPropertyHandles = StructPropertyHandle->AddChildStructure(StructOnScope.ToSharedRef());
+
+	// 因为是伪造的，返回结果为空，但此时StructPropertyHandle的ChildNode不为空
+	TSharedPtr<IPropertyHandle> TempPropHandle = StructPropertyHandle->GetChildHandle(0);
+	TSharedPtr<FPropertyNode> PropertyNode = StaticCastSharedRef<FPropertyHandleBase>(TempPropHandle.ToSharedRef())->GetPropertyNode();
+
+	// 伪造临时InstancedStruct属性
+	FStructProperty* TempProp = new FStructProperty(Property->GetOwnerUObject(), FName(TEXT("InstancedStruct")), RF_Public);
+	TempProp->Struct = FInstancedStruct::StaticStruct();
+
+	// 注入临时Property
+	PRIVATE_GET(PropertyNode.Get(), Property) = TempProp;
+
+	TSharedRef<FInstancedStructWrapperDataDetails> DataDetails = MakeShared<FInstancedStructWrapperDataDetails>(StructPropertyHandle, TempPropHandle);
+
 	StructBuilder.AddCustomBuilder(DataDetails);
 }
 
@@ -275,7 +156,7 @@ void FInstancedStructWrapperDetails::OnTextCommitted(const FText& NewLabel, ETex
 	}
 	FInstancedStructWrapper* Wrapper = nullptr;
 	const UScriptStruct* CommonStruct = nullptr;
-	const FPropertyAccess::Result Result = UE::StructUtils::Private::GetStruct(StructProperty, CommonStruct, Wrapper);
+	const FPropertyAccess::Result Result = GetStructData(StructProperty, CommonStruct, Wrapper);
 
 	if (Result == FPropertyAccess::Success)
 	{
@@ -295,7 +176,7 @@ FText FInstancedStructWrapperDetails::GetCommentAsText() const
 
 	FInstancedStructWrapper* Wrapper = nullptr;
 	const UScriptStruct* CommonStruct = nullptr;
-	const FPropertyAccess::Result Result = UE::StructUtils::Private::GetStruct(StructProperty, CommonStruct, Wrapper);
+	const FPropertyAccess::Result Result = GetStructData(StructProperty, CommonStruct, Wrapper);
 
 	if (Result == FPropertyAccess::Success)
 	{
@@ -323,7 +204,7 @@ FText FInstancedStructWrapperDetails::GetTooltipText() const
 {
 	FInstancedStructWrapper* Wrapper = nullptr;
 	const UScriptStruct* CommonStruct = nullptr;
-	const FPropertyAccess::Result Result = UE::StructUtils::Private::GetStruct(StructProperty, CommonStruct, Wrapper);
+	const FPropertyAccess::Result Result = GetStructData(StructProperty, CommonStruct, Wrapper);
 
 	if (CommonStruct && Result == FPropertyAccess::Success)
 	{
@@ -335,7 +216,11 @@ FText FInstancedStructWrapperDetails::GetTooltipText() const
 
 //////////////////////////////////////////////////////////////////////////
 // FInstancedStructWrapperDataDetails
-FInstancedStructWrapperDataDetails::FInstancedStructWrapperDataDetails(TSharedPtr<IPropertyHandle> InStructProperty)
+
+PRIVATE_DEFINE(FInstancedStructDataDetails, TSharedPtr<IPropertyHandle>, StructProperty);
+
+FInstancedStructWrapperDataDetails::FInstancedStructWrapperDataDetails(TSharedPtr<IPropertyHandle> InStructProperty, TSharedPtr<IPropertyHandle> TempStructProperty)
+	: FInstancedStructDataDetails(TempStructProperty)
 {
 #if DO_CHECK
 	FStructProperty* StructProp = CastFieldChecked<FStructProperty>(InStructProperty->GetProperty());
@@ -343,114 +228,9 @@ FInstancedStructWrapperDataDetails::FInstancedStructWrapperDataDetails(TSharedPt
 	check(StructProp->Struct == FInstancedStructWrapper::StaticStruct());
 #endif
 
-	StructProperty = InStructProperty;
+
+	PRIVATE_GET(this, StructProperty) = InStructProperty;
 }
 
-FInstancedStructWrapperDataDetails::~FInstancedStructWrapperDataDetails()
-{
-	UE::StructUtils::Delegates::OnUserDefinedStructReinstanced.Remove(UserDefinedStructReinstancedHandle);
-}
-
-void FInstancedStructWrapperDataDetails::OnUserDefinedStructReinstancedHandle(const UUserDefinedStruct& Struct)
-{
-	if (StructProvider.IsValid())
-	{
-		// Reset the struct provider immediately, some update functions might get called with the old struct.
-		StructProvider->Reset();
-	}
-	OnRegenerateChildren.ExecuteIfBound();
-}
-
-void FInstancedStructWrapperDataDetails::SetOnRebuildChildren(FSimpleDelegate InOnRegenerateChildren)
-{
-	OnRegenerateChildren = InOnRegenerateChildren;
-}
-
-TArray<TWeakObjectPtr<const UStruct>> FInstancedStructWrapperDataDetails::GetInstanceTypes() const
-{
-	TArray<TWeakObjectPtr<const UStruct>> Result;
-
-	StructProperty->EnumerateConstRawData([&Result](const void* RawData, const int32 /*DataIndex*/, const int32 /*NumDatas*/)
-		{
-			TWeakObjectPtr<const UStruct>& Type = Result.AddDefaulted_GetRef();
-			if (const FInstancedStruct* InstancedStruct = static_cast<const FInstancedStruct*>(RawData))
-			{
-				Result.Add(InstancedStruct->GetScriptStruct());
-			}
-			else
-			{
-				Result.Add(nullptr);
-			}
-			return true;
-		});
-
-	return Result;
-}
-
-void FInstancedStructWrapperDataDetails::OnStructHandlePostChange()
-{
-	if (StructProvider.IsValid())
-	{
-		TArray<TWeakObjectPtr<const UStruct>> InstanceTypes = GetInstanceTypes();
-		if (InstanceTypes != CachedInstanceTypes)
-		{
-			OnRegenerateChildren.ExecuteIfBound();
-		}
-	}
-}
-
-void FInstancedStructWrapperDataDetails::GenerateHeaderRowContent(FDetailWidgetRow& NodeRow)
-{
-	StructProperty->SetOnPropertyValueChanged(FSimpleDelegate::CreateSP(this, &FInstancedStructWrapperDataDetails::OnStructHandlePostChange));
-	if (!UserDefinedStructReinstancedHandle.IsValid())
-	{
-		UserDefinedStructReinstancedHandle = UE::StructUtils::Delegates::OnUserDefinedStructReinstanced.AddSP(this, &FInstancedStructWrapperDataDetails::OnUserDefinedStructReinstancedHandle);
-	}
-}
-
-void FInstancedStructWrapperDataDetails::GenerateChildContent(IDetailChildrenBuilder& ChildBuilder)
-{
-	// Add the rows for the struct
-	TSharedRef<FInstancedStructProvider> NewStructProvider = MakeShared<FInstancedStructProvider>(StructProperty);
-
-	TArray<TSharedPtr<IPropertyHandle>> ChildProperties = StructProperty->AddChildStructure(NewStructProvider);
-	for (TSharedPtr<IPropertyHandle> ChildHandle : ChildProperties)
-	{
-		IDetailPropertyRow& Row = ChildBuilder.AddProperty(ChildHandle.ToSharedRef());
-		OnChildRowAdded(Row);
-	}
-
-	StructProvider = NewStructProvider;
-
-	CachedInstanceTypes = GetInstanceTypes();
-}
-
-void FInstancedStructWrapperDataDetails::Tick(float DeltaTime)
-{
-	// If the instance types change (e.g. due to selecting new struct type), we'll need to update the layout.
-	TArray<TWeakObjectPtr<const UStruct>> InstanceTypes = GetInstanceTypes();
-	if (InstanceTypes != CachedInstanceTypes)
-	{
-		OnRegenerateChildren.ExecuteIfBound();
-	}
-}
-
-FName FInstancedStructWrapperDataDetails::GetName() const
-{
-	static const FName Name("InstancedStructDataDetails");
-	return Name;
-}
-
-void FInstancedStructWrapperDataDetails::PostUndo(bool bSuccess)
-{
-	// Undo; force a sync next Tick
-	LastSyncEditableInstanceFromSourceSeconds = 0.0;
-}
-
-void FInstancedStructWrapperDataDetails::PostRedo(bool bSuccess)
-{
-	// Redo; force a sync next Tick
-	LastSyncEditableInstanceFromSourceSeconds = 0.0;
-}
 
 #undef LOCTEXT_NAMESPACE

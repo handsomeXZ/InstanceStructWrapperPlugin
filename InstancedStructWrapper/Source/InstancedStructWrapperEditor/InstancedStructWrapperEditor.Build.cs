@@ -10,6 +10,19 @@ public class InstancedStructWrapperEditor : ModuleRules
 
         var EngineDir = Path.GetFullPath(Target.RelativeEnginePath);
 
+        PublicIncludePaths.AddRange(
+            new string[] {
+                System.IO.Path.Combine(GetModuleDirectory("PropertyEditor"), "Private")
+           }
+        );
+
+        PrivateIncludePaths.AddRange(
+            new string[] {
+                System.IO.Path.Combine(GetModuleDirectory("PropertyEditor"), "Private")
+           }
+        );
+
+
         PublicDependencyModuleNames.AddRange(
             new string[]
             {
