@@ -39,3 +39,4 @@ struct TStructOpsTypeTraits<FInstancedStructWrapper> : public TStructOpsTypeTrai
 		WithFindInnerPropertyInstance = true,
 	};
 };
+

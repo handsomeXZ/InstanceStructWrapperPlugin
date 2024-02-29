@@ -17,7 +17,13 @@ void FInstancedStructWrapperEditorModule::StartupModule()
 
 void FInstancedStructWrapperEditorModule::ShutdownModule()
 {
-
+	// Unregister the details customization
+	if (FModuleManager::Get().IsModuleLoaded("PropertyEditor"))
+	{
+		FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
+		PropertyModule.UnregisterCustomPropertyTypeLayout("InstancedStructWrapper");
+		PropertyModule.NotifyCustomizationModuleChanged();
+	}
 } 
 
 
