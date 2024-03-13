@@ -10,6 +10,7 @@
 * * *
 * **FInstancedStructWrapper提供颜色高亮**
 ![示例4](Image_4.png)
+* 效果预览，仅FontColor="CD950CFF"
 ![示例4.2](Image_4_2.png)
 * * *
 * **提供FInstancedStructContainer的编辑器支持**
