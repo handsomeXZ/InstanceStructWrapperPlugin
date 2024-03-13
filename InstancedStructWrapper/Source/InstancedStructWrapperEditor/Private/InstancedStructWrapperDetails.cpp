@@ -197,6 +197,16 @@ void FInstancedStructWrapperDetails::CustomizeHeader(TSharedRef<IPropertyHandle>
 
 	//TSharedPtr<STextBlock> TextBlock = StaticCastSharedRef<STextBlock>(PRIVATE_GET(BoxChildrenChildren[1].Get(), Widget));
 
+	WidgetDecl.Widget = SNew(SBorder)
+		.BorderImage(FAppStyle::GetBrush("WhiteBrush"))
+		.ColorAndOpacity(this, &FInstancedStructWrapperDetails::GetFontColor)
+		.BorderBackgroundColor(this, &FInstancedStructWrapperDetails::GetBorderColor)
+		.VAlign(VAlign_Fill)
+		.HAlign(HAlign_Fill)
+		[
+			InternalWidget.ToSharedRef()
+		];
+
 	PRIVATE_GET(BoxChildrenChildren[1].Get(), Widget) = SNew(SHorizontalBox)
 	+ SHorizontalBox::Slot()
 	.VAlign(VAlign_Fill)
@@ -305,6 +315,46 @@ FText FInstancedStructWrapperDetails::GetTooltipText() const
 	}
 
 	return GetCommentAsText();
+}
+
+FSlateColor FInstancedStructWrapperDetails::GetBorderColor() const
+{
+	static const FName NAME_BorderColor = "BorderColor";
+
+	FInstancedStructWrapper* Wrapper = nullptr;
+	const UScriptStruct* CommonStruct = nullptr;
+	const FPropertyAccess::Result Result = GetStructData(StructProperty, CommonStruct, Wrapper);
+
+	if (CommonStruct)
+	{
+		const FString& BorderColor = CommonStruct->GetMetaData(NAME_BorderColor);
+		if (!BorderColor.IsEmpty())
+		{
+			return FLinearColor(COLOR(*BorderColor));
+		}
+	}
+
+	return FLinearColor::Transparent;
+}
+
+FLinearColor FInstancedStructWrapperDetails::GetFontColor() const
+{
+	static const FName NAME_FontColor = "FontColor";
+
+	FInstancedStructWrapper* Wrapper = nullptr;
+	const UScriptStruct* CommonStruct = nullptr;
+	const FPropertyAccess::Result Result = GetStructData(StructProperty, CommonStruct, Wrapper);
+
+	if (CommonStruct)
+	{
+		const FString& FontColor = CommonStruct->GetMetaData(NAME_FontColor);
+		if (!FontColor.IsEmpty())
+		{
+			return FLinearColor(COLOR(*FontColor));
+		}
+	}
+
+	return FLinearColor::White;
 }
 
 //////////////////////////////////////////////////////////////////////////

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "IPropertyTypeCustomization.h"
@@ -45,6 +45,8 @@ protected:
 	void OnTextCommitted(const FText& NewLabel, ETextCommit::Type CommitType);
 	FText GetCommentAsText() const;
 	FText GetTooltipText() const;
+	FSlateColor GetBorderColor() const;
+	FLinearColor GetFontColor() const;
 private:
 	TSharedPtr<FInstancedStructDetails> InstancedStructDetails;
 
