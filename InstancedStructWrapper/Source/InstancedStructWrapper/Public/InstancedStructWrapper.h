@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 
@@ -54,6 +54,14 @@ public:
 	FInstancedStructContainerWrapper() {}
 	FInstancedStructContainerWrapper(const FInstancedStructContainer& InOther) : FInstancedStructContainer(InOther) {}
 	FInstancedStructContainerWrapper(FInstancedStructContainer&& InOther) : FInstancedStructContainer(InOther) {}
+
+	/** For StructOpsTypeTraits */
+	bool Serialize(FArchive& Ar);
+
+#if WITH_EDITORONLY_DATA
+	UPROPERTY()
+	TArray<FText> DisplayNameOverride;
+#endif
 };
 
 template<>

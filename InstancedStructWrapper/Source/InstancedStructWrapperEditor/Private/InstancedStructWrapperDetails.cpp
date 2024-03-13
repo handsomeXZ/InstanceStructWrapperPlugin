@@ -1,4 +1,4 @@
-#include "InstancedStructWrapperDetails.h"
+﻿#include "InstancedStructWrapperDetails.h"
 
 #include "IDetailChildrenBuilder.h"
 #include "Widgets/Input/SComboButton.h"
@@ -337,6 +337,7 @@ FInstancedStructWrapperContainerViewModel::FInstancedStructWrapperContainerViewM
 	for (int32 Index = 0; Index < Container->Num(); ++Index)
 	{
 		GetContainerProxy().Data.Emplace((*Container)[Index]);
+		GetContainerProxy().Data.Last().DisplayNameOverride = Container->DisplayNameOverride[Index];
 	}
 }
 
@@ -354,11 +355,13 @@ void FInstancedStructWrapperContainerViewModel::OnContainerProxyValueChanged()
 {
 	FInstancedStructContainerWrapper* Container = GetContainer();
 	Container->Empty();
+	Container->DisplayNameOverride.Empty();
 
 	TArray<FInstancedStruct> StructDatas;
 	for (auto& Wrapper : GetContainerProxy().Data)
 	{
 		StructDatas.Add((FInstancedStruct)Wrapper);
+		Container->DisplayNameOverride.Add(Wrapper.DisplayNameOverride);
 	}
 	Container->Append(StructDatas);
 
