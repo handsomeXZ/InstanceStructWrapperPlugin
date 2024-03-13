@@ -7,3 +7,7 @@
 * * *
 * **FInstancedStructWrapper结构类型**
 ![示例3](Image_3.png)
+
+
+* **提供FInstancedStructContainer的编辑器支持**
+![示例4](Image_4.png)
