@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 
 #include "InstancedStruct.h"
+#include "InstancedStructContainer.h"
 
 #include "InstancedStructWrapper.generated.h"
 
@@ -13,6 +14,11 @@ struct INSTANCEDSTRUCTWRAPPER_API FInstancedStructWrapper : public FInstancedStr
 	GENERATED_BODY()
 public:
 	FInstancedStructWrapper();
+	explicit FInstancedStructWrapper(const UScriptStruct* InScriptStruct) : FInstancedStruct(InScriptStruct) {}
+	explicit FInstancedStructWrapper(const FConstStructView InOther) : FInstancedStruct(InOther) {}
+	FInstancedStructWrapper(const FInstancedStruct& InOther) : FInstancedStruct(InOther) {}
+	FInstancedStructWrapper(FInstancedStruct&& InOther) : FInstancedStruct(InOther) {}
+
 
 	/** For StructOpsTypeTraits */
 	bool Serialize(FArchive& Ar);
@@ -40,3 +46,24 @@ struct TStructOpsTypeTraits<FInstancedStructWrapper> : public TStructOpsTypeTrai
 	};
 };
 
+USTRUCT(BlueprintType)
+struct INSTANCEDSTRUCTWRAPPER_API FInstancedStructContainerWrapper : public FInstancedStructContainer
+{
+	GENERATED_BODY()
+public:
+	FInstancedStructContainerWrapper() {}
+	FInstancedStructContainerWrapper(const FInstancedStructContainer& InOther) : FInstancedStructContainer(InOther) {}
+	FInstancedStructContainerWrapper(FInstancedStructContainer&& InOther) : FInstancedStructContainer(InOther) {}
+};
+
+template<>
+struct TStructOpsTypeTraits<FInstancedStructContainerWrapper> : public TStructOpsTypeTraitsBase2<FInstancedStructContainerWrapper>
+{
+	enum
+	{
+		WithSerializer = true,
+		WithIdentical = true,
+		WithAddStructReferencedObjects = true,
+		WithGetPreloadDependencies = true,
+	};
+};

@@ -11,6 +11,7 @@ void FInstancedStructWrapperEditorModule::StartupModule()
 	// Register the details customizer
 	FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
 	PropertyModule.RegisterCustomPropertyTypeLayout("InstancedStructWrapper", FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FInstancedStructWrapperDetails::MakeInstance));
+	PropertyModule.RegisterCustomPropertyTypeLayout("InstancedStructContainerWrapper", FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FInstancedStructWrapperContainerDetails::MakeInstance));
 	PropertyModule.NotifyCustomizationModuleChanged();
 
 }
@@ -22,6 +23,7 @@ void FInstancedStructWrapperEditorModule::ShutdownModule()
 	{
 		FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
 		PropertyModule.UnregisterCustomPropertyTypeLayout("InstancedStructWrapper");
+		PropertyModule.UnregisterCustomPropertyTypeLayout("InstancedStructContainerWrapper");
 		PropertyModule.NotifyCustomizationModuleChanged();
 	}
 } 

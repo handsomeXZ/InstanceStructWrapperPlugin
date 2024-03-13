@@ -1,13 +1,12 @@
 #include "InstancedStructWrapperDetails.h"
 
-#include "InstancedStructWrapper.h"
-
 #include "IDetailChildrenBuilder.h"
 #include "Widgets/Input/SComboButton.h"
 #include "DetailWidgetRow.h"
 #include "Widgets/Text/SInlineEditableTextBlock.h"
 #include "DetailLayoutBuilder.h"
 
+#include "IStructureDataProvider.h"
 #include "PropertyNode.h"
 #include "PropertyHandleImpl.h"
 
@@ -76,6 +75,100 @@ FPropertyAccess::Result GetStructData(TSharedPtr<IPropertyHandle> StructProperty
 
 	return bHasResult ? FPropertyAccess::Success : FPropertyAccess::Fail;
 }
+
+FPropertyAccess::Result GetStructContainerData(TSharedPtr<IPropertyHandle> StructProperty, FInstancedStructContainerWrapper*& OutInstancedStructWrapper)
+{
+	bool bHasResult = false;
+	bool bHasMultipleValues = false;
+
+	StructProperty->EnumerateRawData([&bHasResult, &bHasMultipleValues, &OutInstancedStructWrapper](void* RawData, const int32 /*DataIndex*/, const int32 /*NumDatas*/)
+		{
+			if (FInstancedStructContainerWrapper* InstancedStruct = static_cast<FInstancedStructContainerWrapper*>(RawData))
+			{
+				if (!bHasResult)
+				{
+					OutInstancedStructWrapper = InstancedStruct;
+				}
+				else
+				{
+					bHasMultipleValues = true;
+				}
+
+				bHasResult = true;
+			}
+
+			return true;
+		});
+
+	if (bHasMultipleValues)
+	{
+		return FPropertyAccess::MultipleValues;
+	}
+
+	return bHasResult ? FPropertyAccess::Success : FPropertyAccess::Fail;
+}
+
+class FInstancedStructContainerProvider : public IStructureDataProvider
+{
+public:
+	FInstancedStructContainerProvider() = default;
+
+	explicit FInstancedStructContainerProvider(const TSharedPtr<FInstancedStructWrapperContainerViewModel>& InContainerViewModel)
+		: ContainerViewModel(InContainerViewModel)
+	{
+	}
+
+	virtual ~FInstancedStructContainerProvider() override {}
+
+	void Reset()
+	{
+		ContainerViewModel = nullptr;
+	}
+
+	virtual bool IsValid() const override
+	{
+		return ContainerViewModel.IsValid();
+	}
+
+	virtual const UStruct* GetBaseStructure() const override
+	{
+		return FInstancedStructContainerArray::StaticStruct();
+	}
+
+	virtual void GetInstances(TArray<TSharedPtr<FStructOnScope>>& OutInstances) const override
+	{
+		FInstancedStructContainerArray& ContainerProxy = ContainerViewModel->GetContainerProxy();
+
+		TSharedPtr<FStructOnScope> StructOnScope = MakeShared<FStructOnScope>(FInstancedStructContainerArray::StaticStruct(), (uint8*)&ContainerProxy);
+		OutInstances.Add(StructOnScope);
+	}
+
+	virtual bool IsPropertyIndirection() const override
+	{
+		return true;
+	}
+
+	virtual uint8* GetValueBaseAddress(uint8* ParentValueAddress, const UStruct* ExpectedType) const override
+	{
+		if (!ParentValueAddress)
+		{
+			return nullptr;
+		}
+
+		//FInstancedStruct& InstancedStruct = *reinterpret_cast<FInstancedStruct*>(ParentValueAddress);
+		//if (ExpectedType && InstancedStruct.GetScriptStruct() && InstancedStruct.GetScriptStruct()->IsChildOf(ExpectedType))
+		//{
+		//	return InstancedStruct.GetMutableMemory();
+		//}
+
+		return ParentValueAddress;
+	}
+
+protected:
+
+
+	TSharedPtr<FInstancedStructWrapperContainerViewModel> ContainerViewModel;
+};
 
 TSharedRef<IPropertyTypeCustomization> FInstancedStructWrapperDetails::MakeInstance()
 {
@@ -232,5 +325,198 @@ FInstancedStructWrapperDataDetails::FInstancedStructWrapperDataDetails(TSharedPt
 	PRIVATE_GET(this, StructProperty) = InStructProperty;
 }
 
+
+
+//////////////////////////////////////////////////////////////////////////
+// FInstancedStructWrapperContainerViewModel
+FInstancedStructWrapperContainerViewModel::FInstancedStructWrapperContainerViewModel(TSharedRef<IPropertyHandle> InPropertyHandle)
+	: PropertyHandle(InPropertyHandle)
+{
+	const FInstancedStructContainerWrapper* Container = GetContainer();
+
+	for (int32 Index = 0; Index < Container->Num(); ++Index)
+	{
+		GetContainerProxy().Data.Emplace((*Container)[Index]);
+	}
+}
+
+FInstancedStructContainerWrapper* FInstancedStructWrapperContainerViewModel::GetContainer()
+{
+	FInstancedStructContainerWrapper* Wrapper = nullptr;
+	//FProperty* Property = PropertyHandle->GetProperty();
+	const FPropertyAccess::Result Result = GetStructContainerData(PropertyHandle, Wrapper);
+
+	return Wrapper;
+}
+
+
+void FInstancedStructWrapperContainerViewModel::OnContainerProxyValueChanged()
+{
+	FInstancedStructContainerWrapper* Container = GetContainer();
+	Container->Empty();
+
+	TArray<FInstancedStruct> StructDatas;
+	for (auto& Wrapper : GetContainerProxy().Data)
+	{
+		StructDatas.Add((FInstancedStruct)Wrapper);
+	}
+	Container->Append(StructDatas);
+
+	OnContainerChanged.Broadcast();
+}
+
+//////////////////////////////////////////////////////////////////////////
+// FInstancedStructWrapperContainerDetails
+TSharedRef<IPropertyTypeCustomization> FInstancedStructWrapperContainerDetails::MakeInstance()
+{
+	TSharedRef<FInstancedStructWrapperContainerDetails> WrapperDetails = MakeShared<FInstancedStructWrapperContainerDetails>();
+	return WrapperDetails;
+}
+
+FInstancedStructWrapperContainerDetails::FInstancedStructWrapperContainerDetails()
+{
+
+}
+
+void FInstancedStructWrapperContainerDetails::CustomizeHeader(TSharedRef<IPropertyHandle> StructPropertyHandle, class FDetailWidgetRow& HeaderRow, IPropertyTypeCustomizationUtils& StructCustomizationUtils)
+{
+	ContainerViewModel = MakeShared<FInstancedStructWrapperContainerViewModel>(StructPropertyHandle);
+	ContainerViewModel->OnUpdateValueWidget.AddSP(this, &FInstancedStructWrapperContainerDetails::UpdateValueWidget);
+
+	HeaderRow
+		.NameContent()
+		[
+			StructPropertyHandle->CreatePropertyNameWidget()
+		]
+		.ValueContent()
+		[
+			SAssignNew(ValuePanel, SHorizontalBox)
+		]
+		.ExtensionContent()
+		[
+			SAssignNew(ExtensionPanel, SHorizontalBox)
+		];
+
+}
+
+void FInstancedStructWrapperContainerDetails::CustomizeChildren(TSharedRef<IPropertyHandle> StructPropertyHandle, class IDetailChildrenBuilder& StructBuilder, IPropertyTypeCustomizationUtils& StructCustomizationUtils)
+{
+	TSharedRef<FInstancedStructWrapperContainerDataDetails> DataDetails = MakeShared<FInstancedStructWrapperContainerDataDetails>(ContainerViewModel.ToSharedRef());
+	StructBuilder.AddCustomBuilder(DataDetails);
+}
+
+void FInstancedStructWrapperContainerDetails::UpdateValueWidget(FDetailWidgetRow& WidgetRow)
+{
+	ValuePanel->ClearChildren();
+	ExtensionPanel->ClearChildren();
+
+	//WidgetRow.ExtensionWidget.Widget->SetVisibility(EVisibility::SelfHitTestInvisible);
+
+	ValuePanel->AddSlot()
+	.HAlign(WidgetRow.ValueWidget.HorizontalAlignment)
+	.VAlign(WidgetRow.ValueWidget.VerticalAlignment)
+	[
+		WidgetRow.ValueWidget.Widget
+	];
+	ExtensionPanel->AddSlot()
+	.HAlign(WidgetRow.ExtensionWidget.HorizontalAlignment)
+	.VAlign(WidgetRow.ExtensionWidget.VerticalAlignment)
+	[
+		WidgetRow.ExtensionWidget.Widget
+	];
+}
+
+//////////////////////////////////////////////////////////////////////////
+// FInstancedStructWrapperContainerDataDetails
+
+FInstancedStructWrapperContainerDataDetails::FInstancedStructWrapperContainerDataDetails(TSharedRef<FInstancedStructWrapperContainerViewModel> InContainerViewModel)
+{
+	ContainerViewModel = InContainerViewModel;
+}
+
+FInstancedStructWrapperContainerDataDetails::~FInstancedStructWrapperContainerDataDetails()
+{
+	if (ContainerViewModel.IsValid())
+	{
+		ContainerViewModel->OnContainerChanged.Remove(ViewModelOnContainerChangedHandle);
+	}
+}
+
+void FInstancedStructWrapperContainerDataDetails::SetOnRebuildChildren(FSimpleDelegate InOnRegenerateChildren)
+{
+	OnRegenerateChildren = InOnRegenerateChildren;
+}
+
+void FInstancedStructWrapperContainerDataDetails::OnContainerChanged()
+{
+	OnRegenerateChildren.ExecuteIfBound();
+}
+
+void FInstancedStructWrapperContainerDataDetails::GenerateHeaderRowContent(FDetailWidgetRow& NodeRow)
+{
+	ViewModelOnContainerChangedHandle = ContainerViewModel->OnContainerChanged.AddSP(this, &FInstancedStructWrapperContainerDataDetails::OnContainerChanged);
+}
+
+void FInstancedStructWrapperContainerDataDetails::GenerateChildContent(IDetailChildrenBuilder& ChildBuilder)
+{
+	static const FName NAME_ExcludeBaseStruct = "ExcludeBaseStruct";
+	static const FName NAME_BaseStruct = "BaseStruct";
+
+	FInstancedStructContainerArray& ContainerProxy = ContainerViewModel->GetContainerProxy();
+	TSharedPtr<IPropertyHandle> PropertyHandle = ContainerViewModel->GetPropertyHandle();
+
+	// Add the rows for the struct
+	TSharedRef<FInstancedStructContainerProvider> NewStructProvider = MakeShared<FInstancedStructContainerProvider>(ContainerViewModel);
+
+	TArray<TSharedPtr<IPropertyHandle>> ChildProperties = PropertyHandle->AddChildStructure(NewStructProvider);
+	for (TSharedPtr<IPropertyHandle> ChildHandle : ChildProperties)
+	{
+		uint32 ChildNum = 0;
+		ChildHandle->GetNumChildren(ChildNum);
+		for (uint32 ChildIndex = 0; ChildIndex < ChildNum; ++ChildIndex)
+		{
+			if (PropertyHandle->HasMetaData(NAME_ExcludeBaseStruct))
+			{
+				ChildHandle->GetChildHandle(ChildIndex)->SetInstanceMetaData(NAME_ExcludeBaseStruct, NAME_ExcludeBaseStruct.ToString());
+			}
+
+			const FString& BaseStructName = PropertyHandle->GetMetaData(NAME_BaseStruct);
+			if (!BaseStructName.IsEmpty())
+			{
+				ChildHandle->GetChildHandle(ChildIndex)->SetInstanceMetaData(NAME_BaseStruct, BaseStructName);
+			}
+		}
+
+		if (PropertyHandle->HasMetaData(NAME_ExcludeBaseStruct))
+		{
+			ChildHandle->SetInstanceMetaData(NAME_ExcludeBaseStruct, NAME_ExcludeBaseStruct.ToString());
+		}
+
+		const FString& BaseStructName = PropertyHandle->GetMetaData(NAME_BaseStruct);
+		if (!BaseStructName.IsEmpty())
+		{
+			ChildHandle->SetInstanceMetaData(NAME_BaseStruct, BaseStructName);
+		}
+
+		ChildHandle->SetOnPropertyValueChanged(FSimpleDelegate::CreateSP(ContainerViewModel.ToSharedRef(), &FInstancedStructWrapperContainerViewModel::OnContainerProxyValueChanged));
+		ChildHandle->SetOnChildPropertyValueChanged(FSimpleDelegate::CreateSP(ContainerViewModel.ToSharedRef(), &FInstancedStructWrapperContainerViewModel::OnContainerProxyValueChanged));
+
+		TSharedPtr<SWidget> OutNameWidget, OutValueWidget;
+		FDetailWidgetRow WidgetRow;
+		IDetailPropertyRow& Row = ChildBuilder.AddProperty(ChildHandle.ToSharedRef());
+
+		Row.GetDefaultWidgets(OutNameWidget, OutValueWidget, WidgetRow);
+		ContainerViewModel->OnUpdateValueWidget.Broadcast(WidgetRow);
+
+		//Row.Visibility(EVisibility::Collapsed);
+	}
+
+}
+
+FName FInstancedStructWrapperContainerDataDetails::GetName() const
+{
+	static const FName Name("InstancedStructWrapperContainerDataDetails");
+	return Name;
+}
 
 #undef LOCTEXT_NAMESPACE
