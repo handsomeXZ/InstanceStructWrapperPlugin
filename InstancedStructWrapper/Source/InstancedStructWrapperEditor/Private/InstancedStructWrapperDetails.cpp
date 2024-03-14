@@ -257,17 +257,19 @@ void FInstancedStructWrapperDetails::OnTextCommitted(const FText& NewLabel, ETex
 	{
 		return;
 	}
-	FInstancedStructWrapper* Wrapper = nullptr;
-	const UScriptStruct* CommonStruct = nullptr;
-	const FPropertyAccess::Result Result = GetStructData(StructProperty, CommonStruct, Wrapper);
+	StructProperty->NotifyPreChange();
 
-	if (Result == FPropertyAccess::Success)
-	{
-		if (CommonStruct && Wrapper)
+	StructProperty->EnumerateRawData([&NewLabel](void* RawData, const int32 /*DataIndex*/, const int32 /*NumDatas*/)
 		{
-			Wrapper->DisplayNameOverride = NewLabel;
-		}
-	}
+			if (FInstancedStructWrapper* Wrapper = static_cast<FInstancedStructWrapper*>(RawData))
+			{
+				Wrapper->DisplayNameOverride = NewLabel;
+			}
+			return true;
+		});
+
+	StructProperty->NotifyPostChange(EPropertyChangeType::ValueSet);
+	StructProperty->NotifyFinishedChangingProperties();
 }
 
 FText FInstancedStructWrapperDetails::GetCommentAsText() const

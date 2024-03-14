@@ -116,7 +116,7 @@ public:
 	virtual void GenerateChildContent(IDetailChildrenBuilder& ChildrenBuilder) override;
 	//virtual void Tick(float DeltaTime) override;
 	//virtual bool RequiresTick() const override { return true; }
-	virtual bool InitiallyCollapsed() const override { return false; }
+	virtual bool InitiallyCollapsed() const override { return true; }
 	virtual FName GetName() const override;
 	//~ End IDetailCustomNodeBuilder interface
 
