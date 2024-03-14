@@ -60,8 +60,6 @@ public:
 
 };
 
-DECLARE_MULTICAST_DELEGATE_OneParam(FOnUpdateValueWidget, FDetailWidgetRow&)
-
 struct FInstancedStructWrapperContainerViewModel : public TSharedFromThis<FInstancedStructWrapperContainerViewModel>
 {
 	FInstancedStructWrapperContainerViewModel() : PropertyHandle(nullptr) {}
@@ -72,9 +70,9 @@ struct FInstancedStructWrapperContainerViewModel : public TSharedFromThis<FInsta
 	FInstancedStructContainerArray& GetContainerProxy() { return ContainerProxy; }
 
 	void OnContainerProxyValueChanged();
+	void UpdateChildMetaData();
 
 	FSimpleMulticastDelegate OnContainerChanged;
-	FOnUpdateValueWidget OnUpdateValueWidget;
 protected:
 	FInstancedStructContainerArray ContainerProxy;
 	
@@ -94,39 +92,7 @@ public:
 	static TSharedRef<IPropertyTypeCustomization> MakeInstance();
 
 protected:
-	void UpdateValueWidget(FDetailWidgetRow& WidgetRow);
+	void OverrideProperty(TSharedRef<IPropertyHandle> StructPropertyHandle, class IDetailChildrenBuilder& StructBuilder);
 protected:
-	TSharedPtr<SButton> AddButton;
-	TSharedPtr<SButton> ClearButton;
-	TSharedPtr<SHorizontalBox> ValuePanel;
-	TSharedPtr<SHorizontalBox> ExtensionPanel;
-
-	TSharedPtr<FInstancedStructWrapperContainerViewModel> ContainerViewModel;
-};
-
-class FInstancedStructWrapperContainerDataDetails : public IDetailCustomNodeBuilder, public FSelfRegisteringEditorUndoClient, public TSharedFromThis<FInstancedStructWrapperContainerDataDetails>
-{
-public:
-	FInstancedStructWrapperContainerDataDetails(TSharedRef<FInstancedStructWrapperContainerViewModel> InContainerViewModel);
-	~FInstancedStructWrapperContainerDataDetails();
-
-	//~ Begin IDetailCustomNodeBuilder interface
-	virtual void SetOnRebuildChildren(FSimpleDelegate InOnRegenerateChildren) override;
-	virtual void GenerateHeaderRowContent(FDetailWidgetRow& NodeRow) override;
-	virtual void GenerateChildContent(IDetailChildrenBuilder& ChildrenBuilder) override;
-	//virtual void Tick(float DeltaTime) override;
-	//virtual bool RequiresTick() const override { return true; }
-	virtual bool InitiallyCollapsed() const override { return true; }
-	virtual FName GetName() const override;
-	//~ End IDetailCustomNodeBuilder interface
-
-private:
-	void OnContainerChanged();
-
-	/** Delegate that can be used to refresh the child rows of the current struct (eg, when changing struct type) */
-	FSimpleDelegate OnRegenerateChildren;
-
-	FDelegateHandle ViewModelOnContainerChangedHandle;
-
 	TSharedPtr<FInstancedStructWrapperContainerViewModel> ContainerViewModel;
 };
