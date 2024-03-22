@@ -3,7 +3,11 @@
 #define LOCTEXT_NAMESPACE "InstancedStructWrapper"
 
 FInstancedStructWrapper::FInstancedStructWrapper()
+#if WITH_EDITOR
+#if WITH_EDITORONLY_DATA
 	: DisplayNameOverride(FText())
+#endif
+#endif
 {
 
 }
