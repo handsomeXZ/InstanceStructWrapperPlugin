@@ -18,7 +18,10 @@ bool FInstancedStructWrapper::Serialize(FArchive& Ar)
 
 #if WITH_EDITOR
 #if WITH_EDITORONLY_DATA
-	Ar << DisplayNameOverride;
+	if (!Ar.IsFilterEditorOnly())
+	{
+		Ar << DisplayNameOverride;
+	}
 #endif
 #endif
 
@@ -31,7 +34,10 @@ bool FInstancedStructContainerWrapper::Serialize(FArchive& Ar)
 
 #if WITH_EDITOR
 #if WITH_EDITORONLY_DATA
-	Ar << DisplayNameOverride;
+	if (!Ar.IsFilterEditorOnly())
+	{
+		Ar << DisplayNameOverride;
+	}
 #endif
 #endif
 

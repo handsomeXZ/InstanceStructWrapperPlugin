@@ -389,7 +389,7 @@ FInstancedStructWrapperContainerViewModel::FInstancedStructWrapperContainerViewM
 	for (int32 Index = 0; Index < Container->Num(); ++Index)
 	{
 		GetContainerProxy().Data.Emplace((*Container)[Index]);
-		GetContainerProxy().Data.Last().DisplayNameOverride = Container->DisplayNameOverride[Index];
+		GetContainerProxy().Data.Last().DisplayNameOverride = Container->DisplayNameOverride.IsEmpty() ? FText() : Container->DisplayNameOverride[Index];
 	}
 }
 
