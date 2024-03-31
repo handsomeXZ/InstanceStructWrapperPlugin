@@ -3,6 +3,7 @@
 #include "Widgets/SOverlay.h"
 #include "Components/RichTextBlock.h"
 #include "Components/RichTextBlockImageDecorator.h"
+#include "Blueprint/UserWidget.h"
 
 #define LOCTEXT_NAMESPACE "SchemaDecorator"
 
@@ -172,6 +173,16 @@ TSharedPtr<SWidget> FSchemaDecoratorOverlayStyle_Image::GetStyleWidget(URichText
 
 TSharedPtr<SWidget> FSchemaDecoratorOverlayStyle_UserWidget::GetStyleWidget(URichTextBlockSchemaDecoratorStyleSheet* StyleSheet) const
 {
+	if (!IsValid(UserWidgetClass))
+	{
+		return TSharedPtr<SWidget>();
+	}
+
+	if (UUserWidget* Widget = NewObject<UUserWidget>(GetTransientPackage(), UserWidgetClass))
+	{
+		return Widget->TakeWidget();
+	}
+
 	return TSharedPtr<SWidget>();
 }
 //////////////////////////////////////////////////////////////////////////
