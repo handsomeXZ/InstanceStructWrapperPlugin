@@ -116,6 +116,16 @@ TSharedPtr<SWidget> UInstancedStructSchemaBase::GetButtonContentOverride(TShared
 	return nullptr;
 }
 
+TSharedPtr<SWidget> UInstancedStructSchemaBase::GetButtonContentExtension(TSharedRef<IPropertyHandle> StructProperty) const
+{
+	return nullptr;
+}
+
+TSharedPtr<SWidget> UInstancedStructSchemaBase::GetContainerTopExtension(TSharedRef<IPropertyHandle> StructProperty, TSharedRef<FInstancedStructWrapperContainerViewModel> ViewModel) const
+{
+	return nullptr;
+}
+
 FInstancedStructWrapperEditorStyle::FInstancedStructWrapperEditorStyle()
 	: FSlateStyleSet(TEXT("InstancedStructWrapperEditorStyle"))
 {
@@ -307,6 +317,7 @@ void FInstancedStructWrapperDetails::CustomizeValueWidgetBySchema(FDetailWidgetD
 
 
 	// 重定义一些外观样式
+	TSharedPtr<SHorizontalBox> ValueWidget;
 	ValueWidgetDecl.Widget = SNew(SBorder)
 		.BorderImage(FAppStyle::GetBrush("WhiteBrush"))
 		.ColorAndOpacity(this, &FInstancedStructWrapperDetails::GetFontColor)
@@ -314,10 +325,23 @@ void FInstancedStructWrapperDetails::CustomizeValueWidgetBySchema(FDetailWidgetD
 		.VAlign(VAlign_Fill)
 		.HAlign(HAlign_Fill)
 		[
-			InternalWidget.ToSharedRef()
+			SAssignNew(ValueWidget, SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			[
+				InternalWidget.ToSharedRef()
+			]
 		];
 
 	TSharedPtr<SWidget> ContentOverrideWidget = GetButtonContentOverride();
+	TSharedPtr<SWidget> ContentExtensionWidget = GetButtonContentExtension();
+	if (ContentExtensionWidget.IsValid())
+	{
+		ValueWidget->AddSlot()
+		[
+			ContentExtensionWidget.ToSharedRef()
+		];
+	}
+
 	if (ContentOverrideWidget.IsValid())
 	{
 		// 清空外部容器的样式
@@ -417,6 +441,16 @@ TSharedPtr<SWidget> FInstancedStructWrapperDetails::GetButtonContentOverride() c
 	if (IsValid(SchemaClass) && SchemaClass->IsChildOf(UInstancedStructSchemaBase::StaticClass()) && StructProperty.IsValid())
 	{
 		return SchemaClass->GetDefaultObject<UInstancedStructSchemaBase>()->GetButtonContentOverride(StructProperty.ToSharedRef());
+	}
+
+	return nullptr;
+}
+
+TSharedPtr<SWidget> FInstancedStructWrapperDetails::GetButtonContentExtension() const
+{
+	if (IsValid(SchemaClass) && SchemaClass->IsChildOf(UInstancedStructSchemaBase::StaticClass()) && StructProperty.IsValid())
+	{
+		return SchemaClass->GetDefaultObject<UInstancedStructSchemaBase>()->GetButtonContentExtension(StructProperty.ToSharedRef());
 	}
 
 	return nullptr;
@@ -548,9 +582,9 @@ void FInstancedStructWrapperContainerViewModel::OnContainerProxyValueChanged()
 	}
 	Container->Append(StructDatas);
 
-	OnContainerChanged.Broadcast();
-
 	UpdateChildMetaData();
+
+	OnContainerChanged.Broadcast();
 }
 
 void FInstancedStructWrapperContainerViewModel::UpdateChildMetaData()
@@ -559,9 +593,9 @@ void FInstancedStructWrapperContainerViewModel::UpdateChildMetaData()
 	static const FName NAME_BaseStruct = "BaseStruct";
 
 	// 多获取一次，剔除AddChildStructure的副作用
-	TSharedPtr<IPropertyHandle> ChildHandle = PropertyHandle->GetChildHandle(0)->GetChildHandle(0);
+	TSharedPtr<IPropertyHandle> ArrayHandle = PropertyHandle->GetChildHandle(0)->GetChildHandle(0);
 	FProperty* Property = PropertyHandle->GetProperty();
-	FProperty* ChildProperty = ChildHandle->GetProperty();
+	FProperty* ChildProperty = ArrayHandle->GetProperty();
 
 	if (PropertyHandle->HasMetaData(NAME_ExcludeBaseStruct))
 	{
@@ -591,10 +625,28 @@ FInstancedStructWrapperContainerDetails::FInstancedStructWrapperContainerDetails
 void FInstancedStructWrapperContainerDetails::CustomizeHeader(TSharedRef<IPropertyHandle> StructPropertyHandle, class FDetailWidgetRow& HeaderRow, IPropertyTypeCustomizationUtils& StructCustomizationUtils)
 {
 	ContainerViewModel = MakeShared<FInstancedStructWrapperContainerViewModel>(StructPropertyHandle);
+
+	InitSchemaClass();
 }
 
 void FInstancedStructWrapperContainerDetails::CustomizeChildren(TSharedRef<IPropertyHandle> StructPropertyHandle, class IDetailChildrenBuilder& StructBuilder, IPropertyTypeCustomizationUtils& StructCustomizationUtils)
 {
+	TSharedPtr<SWidget> TopExtensionWidget = GetContainerTopExtension();
+	if (TopExtensionWidget.IsValid())
+	{
+		FDetailWidgetRow& ExtensionRow = StructBuilder.AddCustomRow(LOCTEXT("InstancedStructWrapperContainerDetails", "Extension"));
+		ExtensionRow.NameContent()
+		[
+			SNew(STextBlock)
+			.Font(IDetailLayoutBuilder::GetDetailFont())
+			.Text(LOCTEXT("InstancedStructWrapperContainerDetails", "Extension"))
+		]
+		.ValueContent()
+		[
+			TopExtensionWidget.ToSharedRef()
+		];
+	}
+
 	OverrideProperty(StructPropertyHandle, StructBuilder);
 }
 
@@ -605,18 +657,62 @@ void FInstancedStructWrapperContainerDetails::OverrideProperty(TSharedRef<IPrope
 
 	check(ChildProperties.Num());
 
-	TSharedPtr<IPropertyHandle> ChildHandle = ChildProperties[0];
+	// 这里取第一个属性，FInstancedStructContainerArray::Data
+	TSharedPtr<IPropertyHandle> ArrayHandle = ChildProperties[0];
 
 	ContainerViewModel->UpdateChildMetaData();
-	ChildHandle->SetOnPropertyValueChanged(FSimpleDelegate::CreateSP(ContainerViewModel.ToSharedRef(), &FInstancedStructWrapperContainerViewModel::OnContainerProxyValueChanged));
-	ChildHandle->SetOnChildPropertyValueChanged(FSimpleDelegate::CreateSP(ContainerViewModel.ToSharedRef(), &FInstancedStructWrapperContainerViewModel::OnContainerProxyValueChanged));
+	ArrayHandle->SetOnPropertyValueChanged(FSimpleDelegate::CreateSP(ContainerViewModel.ToSharedRef(), &FInstancedStructWrapperContainerViewModel::OnContainerProxyValueChanged));
+	ArrayHandle->SetOnChildPropertyValueChanged(FSimpleDelegate::CreateSP(ContainerViewModel.ToSharedRef(), &FInstancedStructWrapperContainerViewModel::OnContainerProxyValueChanged));
 
-	IDetailPropertyRow& Row = StructBuilder.AddProperty(ChildHandle.ToSharedRef());
+	IDetailPropertyRow& Row = StructBuilder.AddProperty(ArrayHandle.ToSharedRef());
 
 	Row.DisplayName(StructPropertyHandle->GetPropertyDisplayName());
 	Row.ToolTip(StructPropertyHandle->GetToolTipText());
 
-	StructPropertyHandle = ChildHandle.ToSharedRef();
+	// 对于TArray类型的数据，不允许CustomWidget，因为它每次更新成员都需要重新创建SPropertyValueWidget。
+}
+
+void FInstancedStructWrapperContainerDetails::InitSchemaClass()
+{
+	const UScriptStruct* CommonStruct = nullptr;
+	static const FName NAME_BaseStruct = "BaseStruct";
+	{
+		const FString& BaseStructName = ContainerViewModel->GetPropertyHandle()->GetMetaData(NAME_BaseStruct);
+		if (!BaseStructName.IsEmpty())
+		{
+			CommonStruct = UClass::TryFindTypeSlow<UScriptStruct>(BaseStructName);
+			if (!CommonStruct)
+			{
+				CommonStruct = LoadObject<UScriptStruct>(nullptr, *BaseStructName);
+			}
+		}
+	}
+
+
+	static const FName NAME_SchemaClass = "SchemaClass";
+	SchemaClass = nullptr;
+	if (CommonStruct)
+	{
+		const FString& SchemaClassName = CommonStruct->GetMetaData(NAME_SchemaClass);
+		if (!SchemaClassName.IsEmpty())
+		{
+			SchemaClass = UClass::TryFindTypeSlow<UClass>(SchemaClassName);
+			if (!SchemaClass)
+			{
+				SchemaClass = LoadObject<UClass>(nullptr, *SchemaClassName);
+			}
+		}
+	}
+}
+
+TSharedPtr<SWidget> FInstancedStructWrapperContainerDetails::GetContainerTopExtension() const
+{
+	if (IsValid(SchemaClass) && SchemaClass->IsChildOf(UInstancedStructSchemaBase::StaticClass()) && ContainerViewModel.IsValid())
+	{
+		return SchemaClass->GetDefaultObject<UInstancedStructSchemaBase>()->GetContainerTopExtension(ContainerViewModel->GetPropertyHandle().ToSharedRef(), ContainerViewModel.ToSharedRef());
+	}
+
+	return nullptr;
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 
 #include "InstancedStructWrapperDetails.h"
+#include "Widgets/SCompoundWidget.h"
 
 #include "RichTextBlockSchemaDecoratorEditor.generated.h"
 
@@ -15,6 +16,7 @@ class USchemaDecoratorOverlayStyle_BaseSchema : public UInstancedStructSchemaBas
 	GENERATED_BODY()
 public:
 	virtual TSharedPtr<SWidget> GetButtonContentOverride(TSharedRef<IPropertyHandle> StructProperty) const override;
+	virtual TSharedPtr<SWidget> GetContainerTopExtension(TSharedRef<IPropertyHandle> StructProperty, TSharedRef<FInstancedStructWrapperContainerViewModel> ViewModel) const override;
 };
 
 UCLASS()
@@ -43,3 +45,21 @@ public:
 //////////////////////////////////////////////////////////////////////////
 // ~End Overlay Style Schema
 //////////////////////////////////////////////////////////////////////////
+
+class SOverlayStylePreview : public SCompoundWidget
+{
+public:
+
+	SLATE_BEGIN_ARGS(SOverlayStylePreview)
+		{}
+	SLATE_END_ARGS()
+
+	void Construct(const FArguments& InArgs, TSharedRef<FInstancedStructWrapperContainerViewModel> ViewModel);
+
+	void GenerateOverlayChildren();
+	void OnContainerChanged();
+private:
+	TSharedPtr<SOverlay> OverlyPanel;
+
+	TSharedPtr<FInstancedStructWrapperContainerViewModel> ContainerViewModel;
+};

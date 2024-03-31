@@ -22,7 +22,17 @@ class INSTANCEDSTRUCTWRAPPEREDITOR_API UInstancedStructSchemaBase : public UObje
 {
 	GENERATED_BODY()
 public:
+	// FInstancedStructWrapper
+	// 覆盖SComboButton的内容
 	virtual TSharedPtr<SWidget> GetButtonContentOverride(TSharedRef<IPropertyHandle> StructProperty) const;
+	// 提供SComboButton右边的ExtensionWidget
+	virtual TSharedPtr<SWidget> GetButtonContentExtension(TSharedRef<IPropertyHandle> StructProperty) const;
+	// ~ FInstancedStructWrapper
+
+	// FInstancedStructContainerWrapper
+	// 提供Array顶部的ExtensionWidget
+	virtual TSharedPtr<SWidget> GetContainerTopExtension(TSharedRef<IPropertyHandle> StructProperty, TSharedRef<struct FInstancedStructWrapperContainerViewModel> ViewModel) const;
+	// ~ FInstancedStructContainerWrapper
 };
 
 class FInstancedStructWrapperEditorStyle
@@ -71,7 +81,7 @@ protected:
 	FSlateColor GetBorderColor() const;
 	FLinearColor GetFontColor() const;
 	TSharedPtr<SWidget> GetButtonContentOverride() const;
-
+	TSharedPtr<SWidget> GetButtonContentExtension() const;
 protected:
 	void OnTextCommitted(const FText& NewLabel, ETextCommit::Type CommitType);
 	FText GetCommentAsText() const;
@@ -124,7 +134,14 @@ public:
 	static TSharedRef<IPropertyTypeCustomization> MakeInstance();
 
 protected:
+	// 通过元数据来定义自定义行为
+	void InitSchemaClass();
+
 	void OverrideProperty(TSharedRef<IPropertyHandle> StructPropertyHandle, class IDetailChildrenBuilder& StructBuilder);
+	TSharedPtr<SWidget> GetContainerTopExtension() const;
 protected:
 	TSharedPtr<FInstancedStructWrapperContainerViewModel> ContainerViewModel;
+
+	// 通过元数据来定义自定义行为，重定义的行为由SchemaClass提供
+	UClass* SchemaClass = nullptr;
 };

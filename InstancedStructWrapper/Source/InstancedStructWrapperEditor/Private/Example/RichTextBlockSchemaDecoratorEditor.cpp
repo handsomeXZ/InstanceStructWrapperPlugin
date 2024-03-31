@@ -2,6 +2,9 @@
 
 #include "UMGStyle.h"
 #include "DetailLayoutBuilder.h"
+#include "Widgets/SOverlay.h"
+
+#include "Example/RichTextBlockSchemaDecorator.h"
 
 #define LOCTEXT_NAMESPACE "SchemaDecoratorEditor"
 
@@ -55,6 +58,13 @@ TSharedPtr<SWidget> USchemaDecoratorOverlayStyle_BaseSchema::GetButtonContentOve
 			]
 		];
 }
+
+TSharedPtr<SWidget> USchemaDecoratorOverlayStyle_BaseSchema::GetContainerTopExtension(TSharedRef<IPropertyHandle> StructProperty, TSharedRef<FInstancedStructWrapperContainerViewModel> ViewModel) const
+{
+	return SNew(SOverlayStylePreview, ViewModel);
+}
+
+//----------------------------------------
 
 TSharedPtr<SWidget> USchemaDecoratorOverlayStyle_TextSchema::GetButtonContentOverride(TSharedRef<IPropertyHandle> StructProperty) const
 {
@@ -202,6 +212,72 @@ TSharedPtr<SWidget> USchemaDecoratorOverlayStyle_UserWidgetSchema::GetButtonCont
 // ~End Overlay Style Schema
 //////////////////////////////////////////////////////////////////////////
 
+void SOverlayStylePreview::Construct(const FArguments& InArgs, TSharedRef<FInstancedStructWrapperContainerViewModel> ViewModel)
+{
+	ContainerViewModel = ViewModel;
+	ContainerViewModel->OnContainerChanged.AddSP(this, &SOverlayStylePreview::OnContainerChanged);
+
+	ChildSlot
+	[
+		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot()
+		.HAlign(HAlign_Left)
+		[
+			SNew(SBorder)
+			.BorderImage(FAppStyle::Get().GetBrush("NoBrush"))
+			.Padding(FMargin(4.0f, 4.0f, 4.0f, 4.0f))
+			.BorderBackgroundColor(FLinearColor(0, 0, 0, 0))
+			.ToolTip(FSlateApplicationBase::Get().MakeToolTip(LOCTEXT("OverlayStylePreview", "Preview")))
+			[
+				SAssignNew(OverlyPanel, SOverlay)
+			]
+		]
+	];
+
+	GenerateOverlayChildren();
+}
+
+void SOverlayStylePreview::GenerateOverlayChildren()
+{
+	if (!ContainerViewModel.IsValid())
+	{
+		return;
+	}
+
+	OverlyPanel->ClearChildren();
+
+	TSharedPtr<IPropertyHandle> PropertyHandle = ContainerViewModel->GetPropertyHandle();
+	TArray<UObject*> Outers;
+	PropertyHandle->GetOuterObjects(Outers);
+
+	URichTextBlockSchemaDecoratorStyleSheet* StyleSheet = Cast<URichTextBlockSchemaDecoratorStyleSheet>(Outers[0]);
+	check(StyleSheet);
+
+	FInstancedStructContainerWrapper* Container = ContainerViewModel->GetContainer();
+	for (auto It = Container->begin(); It; ++It)
+	{
+		FStructView StructView = *It;
+		if (FSchemaDecoratorOverlayStyleBase* OverlayStyle = StructView.GetPtr<FSchemaDecoratorOverlayStyleBase>())
+		{
+			TSharedPtr<SWidget> Widget = OverlayStyle->GetStyleWidget(StyleSheet);
+			if (Widget.IsValid())
+			{
+				OverlyPanel->AddSlot()
+					.HAlign(HAlign_Center)
+					.VAlign(VAlign_Center)
+					[
+						Widget.ToSharedRef()
+					];
+			}
+		}
+	}
+
+}
+
+void SOverlayStylePreview::OnContainerChanged()
+{
+	GenerateOverlayChildren();
+}
 
 
 #undef LOCTEXT_NAMESPACE
