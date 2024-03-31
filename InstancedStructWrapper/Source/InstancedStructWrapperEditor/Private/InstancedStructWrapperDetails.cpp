@@ -5,6 +5,7 @@
 #include "DetailWidgetRow.h"
 #include "Widgets/Text/SInlineEditableTextBlock.h"
 #include "DetailLayoutBuilder.h"
+#include "Styling/SlateStyleRegistry.h"
 
 #include "IStructureDataProvider.h"
 #include "PropertyNode.h"
@@ -35,6 +36,8 @@ struct FPtrTaker {
 };
 
 PRIVATE_DEFINE(SComboButton, SHorizontalBox::FSlot*, ButtonContentSlot);
+PRIVATE_DEFINE(SComboButton, TSharedPtr<SButton>, ButtonPtr);
+PRIVATE_DEFINE(SComboButton, TSharedPtr<SHorizontalBox>, HBox);
 PRIVATE_DEFINE(FSlotBase, TSharedRef<SWidget>, Widget);
 PRIVATE_DEFINE(SBoxPanel, TPanelChildren<SBoxPanel::FSlot>, Children, 1);
 PRIVATE_DEFINE(TPanelChildren<SBoxPanel::FSlot>, TArray<TUniquePtr<SBoxPanel::FSlot>>, Children, 2);
@@ -106,6 +109,35 @@ FPropertyAccess::Result GetStructContainerData(TSharedPtr<IPropertyHandle> Struc
 	}
 
 	return bHasResult ? FPropertyAccess::Success : FPropertyAccess::Fail;
+}
+
+FInstancedStructWrapperEditorStyle::FInstancedStructWrapperEditorStyle()
+	: FSlateStyleSet(TEXT("InstancedStructWrapperEditorStyle"))
+{
+	FComboButtonStyle ComboButtonStyle = FAppStyle::Get().GetWidgetStyle<FComboButtonStyle>("ComboButton");
+	ComboButtonStyle.ButtonStyle.NormalPadding = FMargin(0);
+	ComboButtonStyle.ButtonStyle.PressedPadding = FMargin(0);
+	ComboButtonStyle.ButtonStyle.Normal = *FAppStyle::Get().GetBrush("NoBrush");
+	ComboButtonStyle.ButtonStyle.Hovered = *FAppStyle::Get().GetBrush("NoBrush");
+	ComboButtonStyle.ButtonStyle.Pressed = *FAppStyle::Get().GetBrush("NoBrush");
+
+	Set("InstancedStructWrapperEditorStyle.ComboButton", ComboButtonStyle);
+}
+
+void FInstancedStructWrapperEditorStyle::Register()
+{
+	FSlateStyleRegistry::RegisterSlateStyle(Get());
+}
+
+void FInstancedStructWrapperEditorStyle::Unregister()
+{
+	FSlateStyleRegistry::UnRegisterSlateStyle(Get());
+}
+
+FInstancedStructWrapperEditorStyle& FInstancedStructWrapperEditorStyle::Get()
+{
+	static FInstancedStructWrapperEditorStyle Instance;
+	return Instance;
 }
 
 class FInstancedStructContainerProvider : public IStructureDataProvider
@@ -181,48 +213,16 @@ TSharedRef<IPropertyTypeCustomization> FInstancedStructWrapperDetails::MakeInsta
 
 void FInstancedStructWrapperDetails::CustomizeHeader(TSharedRef<IPropertyHandle> StructPropertyHandle, class FDetailWidgetRow& HeaderRow, IPropertyTypeCustomizationUtils& StructCustomizationUtils)
 {
+	// 初始化
 	StructProperty = StructPropertyHandle;
+	InitSchemaClass();
 
+	// 获取默认Widget
 	InstancedStructDetails->CustomizeHeader(StructPropertyHandle, HeaderRow, StructCustomizationUtils);
-
 	FDetailWidgetDecl& WidgetDecl = HeaderRow.ValueContent();
-	TSharedPtr<SComboButton> InternalWidget = StaticCastSharedRef<SComboButton>(WidgetDecl.Widget);
-
-	FSlotBase* SlotBase = PRIVATE_GET(InternalWidget.Get(), ButtonContentSlot);
-
-	TSharedPtr<SHorizontalBox> HorizontalBox = StaticCastSharedRef<SHorizontalBox>(PRIVATE_GET(SlotBase, Widget));
-
-	TPanelChildren<SBoxPanel::FSlot>& BoxChildren = PRIVATE_GET(HorizontalBox.Get(), Children, 1);
-	TArray<TUniquePtr<SBoxPanel::FSlot>>& BoxChildrenChildren = PRIVATE_GET(&BoxChildren, Children, 2);
-
-	//TSharedPtr<STextBlock> TextBlock = StaticCastSharedRef<STextBlock>(PRIVATE_GET(BoxChildrenChildren[1].Get(), Widget));
-
-	WidgetDecl.Widget = SNew(SBorder)
-		.BorderImage(FAppStyle::GetBrush("WhiteBrush"))
-		.ColorAndOpacity(this, &FInstancedStructWrapperDetails::GetFontColor)
-		.BorderBackgroundColor(this, &FInstancedStructWrapperDetails::GetBorderColor)
-		.VAlign(VAlign_Fill)
-		.HAlign(HAlign_Fill)
-		[
-			InternalWidget.ToSharedRef()
-		];
-
-	PRIVATE_GET(BoxChildrenChildren[1].Get(), Widget) = SNew(SHorizontalBox)
-	+ SHorizontalBox::Slot()
-	.VAlign(VAlign_Fill)
-	.HAlign(HAlign_Fill)
-	[
-		SNew(SInlineEditableTextBlock)
-		.Font(IDetailLayoutBuilder::GetDetailFont())
-		.OnVerifyTextChanged_Lambda([](const FText& NewLabel, FText& OutErrorMessage)
-		{
-			return NewLabel.IsEmpty() || !NewLabel.IsEmptyOrWhitespace();	// 允许是空内容
-		})
-		.OnTextCommitted(this, &FInstancedStructWrapperDetails::OnTextCommitted)
-		.Text(this, &FInstancedStructWrapperDetails::GetCommentAsText)
-		.ToolTipText(this, &FInstancedStructWrapperDetails::GetTooltipText)
-		.Justification(ETextJustify::Center)
-	];
+	
+	// 重定义Widget
+	CustomizeValueWidgetBySchema(WidgetDecl);
 }
 
 void FInstancedStructWrapperDetails::CustomizeChildren(TSharedRef<class IPropertyHandle> StructPropertyHandle, class IDetailChildrenBuilder& StructBuilder, IPropertyTypeCustomizationUtils& StructCustomizationUtils)
@@ -249,6 +249,172 @@ void FInstancedStructWrapperDetails::CustomizeChildren(TSharedRef<class IPropert
 	TSharedRef<FInstancedStructWrapperDataDetails> DataDetails = MakeShared<FInstancedStructWrapperDataDetails>(StructPropertyHandle, TempPropHandle);
 
 	StructBuilder.AddCustomBuilder(DataDetails);
+}
+
+void FInstancedStructWrapperDetails::InitSchemaClass()
+{
+	FInstancedStructWrapper* Wrapper = nullptr;
+	const UScriptStruct* CommonStruct = nullptr;
+	const FPropertyAccess::Result Result = GetStructData(StructProperty, CommonStruct, Wrapper);
+
+	if (!CommonStruct)
+	{
+		static const FName NAME_BaseStruct = "BaseStruct";
+		{
+			const FString& BaseStructName = StructProperty->GetMetaData(NAME_BaseStruct);
+			if (!BaseStructName.IsEmpty())
+			{
+				CommonStruct = UClass::TryFindTypeSlow<UScriptStruct>(BaseStructName);
+				if (!CommonStruct)
+				{
+					CommonStruct = LoadObject<UScriptStruct>(nullptr, *BaseStructName);
+				}
+			}
+		}
+	}
+
+
+	static const FName NAME_SchemaClass = "SchemaClass";
+	SchemaClass = nullptr;
+	if (CommonStruct)
+	{
+		const FString& SchemaClassName = CommonStruct->GetMetaData(NAME_SchemaClass);
+		if (!SchemaClassName.IsEmpty())
+		{
+			SchemaClass = UClass::TryFindTypeSlow<UClass>(SchemaClassName);
+			if (!SchemaClass)
+			{
+				SchemaClass = LoadObject<UClass>(nullptr, *SchemaClassName);
+			}
+		}
+	}
+}
+
+void FInstancedStructWrapperDetails::CustomizeValueWidgetBySchema(FDetailWidgetDecl& ValueWidgetDecl)
+{
+	TSharedPtr<SComboButton> InternalWidget = StaticCastSharedRef<SComboButton>(ValueWidgetDecl.Widget);
+
+	FSlotBase* SlotBase = PRIVATE_GET(InternalWidget.Get(), ButtonContentSlot);
+	TSharedPtr<SButton> ButtonPtr = PRIVATE_GET(InternalWidget.Get(), ButtonPtr);
+
+	TSharedPtr<SHorizontalBox> MainHorizontalBox = PRIVATE_GET(InternalWidget.Get(), HBox);
+	TSharedPtr<SHorizontalBox> ChildHorizontalBox = StaticCastSharedRef<SHorizontalBox>(PRIVATE_GET(SlotBase, Widget));
+
+
+	// 重定义一些外观样式
+	ValueWidgetDecl.Widget = SNew(SBorder)
+		.BorderImage(FAppStyle::GetBrush("WhiteBrush"))
+		.ColorAndOpacity(this, &FInstancedStructWrapperDetails::GetFontColor)
+		.BorderBackgroundColor(this, &FInstancedStructWrapperDetails::GetBorderColor)
+		.VAlign(VAlign_Fill)
+		.HAlign(HAlign_Fill)
+		[
+			InternalWidget.ToSharedRef()
+		];
+
+	TSharedPtr<SWidget> ContentOverrideWidget = GetButtonContentOverride();
+	if (ContentOverrideWidget.IsValid())
+	{
+		// 清空外部容器的样式
+		ValueWidgetDecl.MinWidth = 0.0f;
+		ValueWidgetDecl.MaxWidth = 0.0f;
+		ButtonPtr->SetContentPadding(FMargin(0));
+		ButtonPtr->SetButtonStyle(&FInstancedStructWrapperEditorStyle::Get().GetWidgetStyle<FComboButtonStyle>("InstancedStructWrapperEditorStyle.ComboButton").ButtonStyle);
+
+		MainHorizontalBox->ClearChildren();	// ClearChildren的同时可以将DownArrow清除
+		MainHorizontalBox->AddSlot()
+		.Padding(0)
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot()
+			[
+				SNew(SBox)
+				.MinDesiredWidth(4.0f)
+				.MinDesiredHeight(28.0f)
+				.VAlign(VAlign_Fill)
+				.HAlign(HAlign_Fill)
+				[
+					ContentOverrideWidget.ToSharedRef()
+				]
+			]
+		];
+	}
+	else
+	{
+		// 如果没有重写内容，就使用默认Widget，同时提供可编辑文本框
+
+		TPanelChildren<SBoxPanel::FSlot>& BoxChildren = PRIVATE_GET(ChildHorizontalBox.Get(), Children, 1);
+		TArray<TUniquePtr<SBoxPanel::FSlot>>& BoxChildrenChildren = PRIVATE_GET(&BoxChildren, Children, 2);
+
+		//TSharedPtr<STextBlock> TextBlock = StaticCastSharedRef<STextBlock>(PRIVATE_GET(BoxChildrenChildren[1].Get(), Widget));
+
+		PRIVATE_GET(BoxChildrenChildren[1].Get(), Widget) = SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.VAlign(VAlign_Fill)
+			.HAlign(HAlign_Fill)
+			[
+				SNew(SInlineEditableTextBlock)
+					.Font(IDetailLayoutBuilder::GetDetailFont())
+					.OnVerifyTextChanged_Lambda([](const FText& NewLabel, FText& OutErrorMessage)
+						{
+							return NewLabel.IsEmpty() || !NewLabel.IsEmptyOrWhitespace();	// 允许是空内容
+						})
+					.OnTextCommitted(this, &FInstancedStructWrapperDetails::OnTextCommitted)
+							.Text(this, &FInstancedStructWrapperDetails::GetCommentAsText)
+							.ToolTipText(this, &FInstancedStructWrapperDetails::GetTooltipText)
+							.Justification(ETextJustify::Center)
+			];
+	}
+}
+
+FSlateColor FInstancedStructWrapperDetails::GetBorderColor() const
+{
+	static const FName NAME_BorderColor = "BorderColor";
+
+	FInstancedStructWrapper* Wrapper = nullptr;
+	const UScriptStruct* CommonStruct = nullptr;
+	const FPropertyAccess::Result Result = GetStructData(StructProperty, CommonStruct, Wrapper);
+
+	if (CommonStruct)
+	{
+		const FString& BorderColor = CommonStruct->GetMetaData(NAME_BorderColor);
+		if (!BorderColor.IsEmpty())
+		{
+			return FLinearColor(COLOR(*BorderColor));
+		}
+	}
+
+	return FLinearColor::Transparent;
+}
+
+FLinearColor FInstancedStructWrapperDetails::GetFontColor() const
+{
+	static const FName NAME_FontColor = "FontColor";
+
+	FInstancedStructWrapper* Wrapper = nullptr;
+	const UScriptStruct* CommonStruct = nullptr;
+	const FPropertyAccess::Result Result = GetStructData(StructProperty, CommonStruct, Wrapper);
+
+	if (CommonStruct)
+	{
+		const FString& FontColor = CommonStruct->GetMetaData(NAME_FontColor);
+		if (!FontColor.IsEmpty())
+		{
+			return FLinearColor(COLOR(*FontColor));
+		}
+	}
+
+	return FLinearColor::White;
+}
+
+TSharedPtr<SWidget> FInstancedStructWrapperDetails::GetButtonContentOverride() const
+{
+	if (IsValid(SchemaClass) && SchemaClass->IsChildOf(UInstancedStructSchemaBase::StaticClass()) && StructProperty.IsValid())
+	{
+		return SchemaClass->GetDefaultObject<UInstancedStructSchemaBase>()->GetButtonContentOverride(StructProperty.ToSharedRef());
+	}
+
+	return nullptr;
 }
 
 void FInstancedStructWrapperDetails::OnTextCommitted(const FText& NewLabel, ETextCommit::Type CommitType)
@@ -317,46 +483,6 @@ FText FInstancedStructWrapperDetails::GetTooltipText() const
 	}
 
 	return GetCommentAsText();
-}
-
-FSlateColor FInstancedStructWrapperDetails::GetBorderColor() const
-{
-	static const FName NAME_BorderColor = "BorderColor";
-
-	FInstancedStructWrapper* Wrapper = nullptr;
-	const UScriptStruct* CommonStruct = nullptr;
-	const FPropertyAccess::Result Result = GetStructData(StructProperty, CommonStruct, Wrapper);
-
-	if (CommonStruct)
-	{
-		const FString& BorderColor = CommonStruct->GetMetaData(NAME_BorderColor);
-		if (!BorderColor.IsEmpty())
-		{
-			return FLinearColor(COLOR(*BorderColor));
-		}
-	}
-
-	return FLinearColor::Transparent;
-}
-
-FLinearColor FInstancedStructWrapperDetails::GetFontColor() const
-{
-	static const FName NAME_FontColor = "FontColor";
-
-	FInstancedStructWrapper* Wrapper = nullptr;
-	const UScriptStruct* CommonStruct = nullptr;
-	const FPropertyAccess::Result Result = GetStructData(StructProperty, CommonStruct, Wrapper);
-
-	if (CommonStruct)
-	{
-		const FString& FontColor = CommonStruct->GetMetaData(NAME_FontColor);
-		if (!FontColor.IsEmpty())
-		{
-			return FLinearColor(COLOR(*FontColor));
-		}
-	}
-
-	return FLinearColor::White;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -432,12 +558,12 @@ void FInstancedStructWrapperContainerViewModel::UpdateChildMetaData()
 	FProperty* Property = PropertyHandle->GetProperty();
 	FProperty* ChildProperty = ChildHandle->GetProperty();
 
-	if (Property->HasMetaData(NAME_ExcludeBaseStruct))
+	if (PropertyHandle->HasMetaData(NAME_ExcludeBaseStruct))
 	{
 		ChildProperty->SetMetaData(NAME_ExcludeBaseStruct, *(NAME_ExcludeBaseStruct.ToString()));
 	}
 
-	const FString& BaseStructName = Property->GetMetaData(NAME_BaseStruct);
+	const FString& BaseStructName = PropertyHandle->GetMetaData(NAME_BaseStruct);
 	if (!BaseStructName.IsEmpty())
 	{
 		ChildProperty->SetMetaData(NAME_BaseStruct, *BaseStructName);

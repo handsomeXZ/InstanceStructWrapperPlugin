@@ -8,6 +8,8 @@
 
 void FInstancedStructWrapperEditorModule::StartupModule()
 {
+	FInstancedStructWrapperEditorStyle::Register();
+
 	// Register the details customizer
 	FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
 	PropertyModule.RegisterCustomPropertyTypeLayout("InstancedStructWrapper", FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FInstancedStructWrapperDetails::MakeInstance));
@@ -18,6 +20,8 @@ void FInstancedStructWrapperEditorModule::StartupModule()
 
 void FInstancedStructWrapperEditorModule::ShutdownModule()
 {
+	FInstancedStructWrapperEditorStyle::Unregister();
+
 	// Unregister the details customization
 	if (FModuleManager::Get().IsModuleLoaded("PropertyEditor"))
 	{

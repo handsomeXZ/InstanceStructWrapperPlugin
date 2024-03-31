@@ -46,6 +46,10 @@ public class InstancedStructWrapperEditor : ModuleRules
                 "PropertyEditor",
                 "UnrealEd",
                 "StructUtilsEngine",
+
+                // Example 仅示例会用到
+                "UMG",
+				// ~Example
             }
             );
 

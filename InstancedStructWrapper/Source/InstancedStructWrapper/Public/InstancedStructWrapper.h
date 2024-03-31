@@ -75,3 +75,13 @@ struct TStructOpsTypeTraits<FInstancedStructContainerWrapper> : public TStructOp
 		WithGetPreloadDependencies = true,
 	};
 };
+
+#if WITH_EDITOR
+UCLASS()
+class INSTANCEDSTRUCTWRAPPER_API UInstancedStructSchemaBase : public UObject
+{
+	GENERATED_BODY()
+public:
+	virtual TSharedPtr<SWidget> GetButtonContentOverride(TSharedRef<IPropertyHandle> StructProperty) const;
+};
+#endif

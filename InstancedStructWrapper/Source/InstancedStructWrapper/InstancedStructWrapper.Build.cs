@@ -40,7 +40,13 @@ public class InstancedStructWrapper : ModuleRules
 				"Slate",
 				"SlateCore",
 				// ... add private dependencies that you statically link with here ...	
-			}
+
+				// Example 仅示例会用到
+				"EnhancedInput",
+                "UMG",
+				"InputCore",
+				// ~Example
+            }
 			);
 		
 		
@@ -50,5 +56,10 @@ public class InstancedStructWrapper : ModuleRules
 				// ... add any modules that your module loads dynamically here ...
 			}
 			);
-	}
+
+        if (Target.bBuildEditor)
+        {
+            PublicDependencyModuleNames.Add("PropertyEditor");
+        }
+    }
 }

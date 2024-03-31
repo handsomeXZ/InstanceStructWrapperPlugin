@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "IPropertyTypeCustomization.h"
 #include "IDetailCustomNodeBuilder.h"
+#include "Styling/SlateStyle.h"
 
 #include "InstancedStructWrapper.h"
 
@@ -14,7 +15,20 @@ class IPropertyHandle;
 class IDetailPropertyRow;
 class IPropertyHandle;
 class FInstancedStructDetails;
+class ISlateStyle;
 
+class FInstancedStructWrapperEditorStyle
+	: public FSlateStyleSet
+{
+public:
+	static FInstancedStructWrapperEditorStyle& Get();
+
+	static void Register();
+	static void Unregister();
+
+private:
+	FInstancedStructWrapperEditorStyle();
+};
 
 USTRUCT()
 struct FInstancedStructContainerArray
@@ -42,15 +56,25 @@ public:
 	virtual void CustomizeChildren(TSharedRef<IPropertyHandle> StructPropertyHandle, class IDetailChildrenBuilder& StructBuilder, IPropertyTypeCustomizationUtils& StructCustomizationUtils) override;
 
 protected:
+	// 通过元数据来定义自定义行为
+	void InitSchemaClass();
+	void CustomizeValueWidgetBySchema(class FDetailWidgetDecl& ValueWidgetDecl);
+
+	FSlateColor GetBorderColor() const;
+	FLinearColor GetFontColor() const;
+	TSharedPtr<SWidget> GetButtonContentOverride() const;
+
+protected:
 	void OnTextCommitted(const FText& NewLabel, ETextCommit::Type CommitType);
 	FText GetCommentAsText() const;
 	FText GetTooltipText() const;
-	FSlateColor GetBorderColor() const;
-	FLinearColor GetFontColor() const;
 private:
 	TSharedPtr<FInstancedStructDetails> InstancedStructDetails;
 
 	TSharedPtr<IPropertyHandle> StructProperty;
+
+	// 通过元数据来定义自定义行为，重定义的行为由SchemaClass提供
+	UClass* SchemaClass = nullptr;
 };
 
 class INSTANCEDSTRUCTWRAPPEREDITOR_API FInstancedStructWrapperDataDetails : public FInstancedStructDataDetails
