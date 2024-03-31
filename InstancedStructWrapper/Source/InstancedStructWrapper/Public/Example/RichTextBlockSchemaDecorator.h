@@ -17,6 +17,11 @@
 
 class ISlateStyle;
 
+//----------------------------------------------------------------------------------------
+// 这里不得不将 Decorator 和 StyleSheet分开定义，因为每个RichTextBlock都会实例化一份 Decorator
+//----------------------------------------------------------------------------------------
+
+// Decorator 提供组装Slate的功能
 UCLASS(Abstract, Blueprintable)
 class INSTANCEDSTRUCTWRAPPER_API URichTextBlockSchemaDecorator : public URichTextBlockDecorator
 {
@@ -28,6 +33,19 @@ public:
 	virtual TSharedPtr<ITextDecorator> CreateDecorator(URichTextBlock* InOwner) override;
 public:
 	UPROPERTY(EditAnywhere, Category = Schema, meta = (ExcludeBaseStruct, BaseStruct = "/Script/InstancedStructWrapper.SchemaDecoratorChooserBase"))
+	TObjectPtr<URichTextBlockSchemaDecoratorStyleSheet> StyleSheet;
+};
+
+// StyleSheet 提供用于组装Slate的数据
+UCLASS()
+class INSTANCEDSTRUCTWRAPPER_API URichTextBlockSchemaDecoratorStyleSheet : public UDataAsset
+{
+	GENERATED_BODY()
+
+public:
+	URichTextBlockSchemaDecoratorStyleSheet() {}
+public:
+	UPROPERTY(EditAnywhere, Category = Schema, meta = (ExcludeBaseStruct, BaseStruct = "/Script/InstancedStructWrapper.SchemaDecoratorChooserBase"))
 	FInstancedStructWrapper Chooser;
 
 	UPROPERTY(EditAnywhere, Category = Appearance, meta = (RequiredAssetDataTags = "RowStructure=/Script/UMG.RichImageRow"))
@@ -36,14 +54,15 @@ public:
 	TObjectPtr<class UDataTable> TextStyle;
 };
 
+// Chooser 提供筛选组装所需数据的规则
 USTRUCT()
 struct INSTANCEDSTRUCTWRAPPER_API FSchemaDecoratorChooserBase
 {
 	GENERATED_BODY()
 	virtual ~FSchemaDecoratorChooserBase() {}
-	virtual FInstancedStructContainerWrapper* GetTargetDataRow(FName InName);
-	virtual FName GetParseName() const { return FName(TEXT("Schema")); };
-	virtual FName GetParseMetaData() const { return FName(TEXT("Name")); };
+	virtual FInstancedStructContainerWrapper* GetTargetDataRow(FName InName) { return nullptr; }
+	virtual FName GetParseName() const { return NAME_None; };
+	virtual FName GetParseMetaData() const { return NAME_None; };
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -53,7 +72,7 @@ USTRUCT(meta = (SchemaClass = "/Script/InstancedStructWrapperEditor.SchemaDecora
 struct INSTANCEDSTRUCTWRAPPER_API FSchemaDecoratorOverlayStyleBase
 {
 	GENERATED_BODY()
-	virtual TSharedPtr<SWidget> GetStyleWidget(URichTextBlockSchemaDecorator* Decorator) const { return TSharedPtr<SWidget>(); }
+	virtual TSharedPtr<SWidget> GetStyleWidget(URichTextBlockSchemaDecoratorStyleSheet* StyleSheet) const { return TSharedPtr<SWidget>(); }
 	virtual ~FSchemaDecoratorOverlayStyleBase() {}
 };
 
@@ -66,7 +85,7 @@ struct FSchemaDecoratorOverlayStyle_Text : public FSchemaDecoratorOverlayStyleBa
 	UPROPERTY(EditAnywhere, Category = Appearance)
 	FText Text;
 
-	virtual TSharedPtr<SWidget> GetStyleWidget(URichTextBlockSchemaDecorator* Decorator) const override;
+	virtual TSharedPtr<SWidget> GetStyleWidget(URichTextBlockSchemaDecoratorStyleSheet* StyleSheet) const override;
 	virtual ~FSchemaDecoratorOverlayStyle_Text() {}
 };
 
@@ -77,7 +96,7 @@ struct FSchemaDecoratorOverlayStyle_Image : public FSchemaDecoratorOverlayStyleB
 	UPROPERTY(EditAnywhere, Category = Appearance)
 	FName Style;
 
-	virtual TSharedPtr<SWidget> GetStyleWidget(URichTextBlockSchemaDecorator* Decorator) const override;
+	virtual TSharedPtr<SWidget> GetStyleWidget(URichTextBlockSchemaDecoratorStyleSheet* StyleSheet) const override;
 	virtual ~FSchemaDecoratorOverlayStyle_Image() {}
 };
 
@@ -88,7 +107,7 @@ struct FSchemaDecoratorOverlayStyle_UserWidget : public FSchemaDecoratorOverlayS
 	UPROPERTY(EditAnywhere, Category = Appearance)
 	TSubclassOf<UUserWidget> UserWidgetClass;
 
-	virtual TSharedPtr<SWidget> GetStyleWidget(URichTextBlockSchemaDecorator* Decorator) const override;
+	virtual TSharedPtr<SWidget> GetStyleWidget(URichTextBlockSchemaDecoratorStyleSheet* StyleSheet) const override;
 	virtual ~FSchemaDecoratorOverlayStyle_UserWidget() {}
 };
 
@@ -101,8 +120,22 @@ struct FSchemaDecoratorOverlayStyle_UserWidget : public FSchemaDecoratorOverlayS
 // Example
 //////////////////////////////////////////////////////////////////////////
 
-// MappingName To Key
-USTRUCT(DisplayName = "MappingKeyStyle")
+// Common Name Chooser
+USTRUCT(DisplayName = "CommonNameChooser", meta=(Tooltip="<Common Name=\"xxx\"/>"))
+struct INSTANCEDSTRUCTWRAPPER_API FSchemaDecoratorChooser_Common : public FSchemaDecoratorChooserBase
+{
+	GENERATED_BODY()
+	virtual ~FSchemaDecoratorChooser_Common() {}
+	virtual FInstancedStructContainerWrapper* GetTargetDataRow(FName InName) override;
+	virtual FName GetParseName() const override { return FName(TEXT("Common")); };
+	virtual FName GetParseMetaData() const override { return FName(TEXT("Name")); };
+
+	UPROPERTY(EditAnywhere, meta = (ExcludeBaseStruct, BaseStruct = "/Script/InstancedStructWrapper.SchemaDecoratorOverlayStyleBase"))
+	TMap<FName, FInstancedStructContainerWrapper> Styles;
+};
+
+// EnhancedInput MappingName To Key Chooser
+USTRUCT(DisplayName = "MappingKeyChooser", meta = (Tooltip = "<Key MappingName=\"xxx\"/>"))
 struct INSTANCEDSTRUCTWRAPPER_API FSchemaDecoratorChooser_MappingToKey : public FSchemaDecoratorChooserBase
 {
 	GENERATED_BODY()

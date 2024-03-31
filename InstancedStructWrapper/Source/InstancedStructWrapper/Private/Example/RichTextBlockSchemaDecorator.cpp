@@ -9,9 +9,9 @@
 class FRichInlineImage : public FRichTextDecorator
 {
 public:
-	FRichInlineImage(URichTextBlock* InOwner, URichTextBlockSchemaDecorator* InDecorator)
+	FRichInlineImage(URichTextBlock* InOwner, URichTextBlockSchemaDecoratorStyleSheet* InStyleSheet)
 		: FRichTextDecorator(InOwner)
-		, Decorator(InDecorator)
+		, StyleSheet(InStyleSheet)
 	{
 	}
 
@@ -19,7 +19,7 @@ public:
 	{
 		FName ParseName = GetParseName();
 		FName ParseMetaData = GetParseMetaData();
-		if (ParseName.IsNone() || ParseMetaData.IsNone())
+		if (ParseName.IsNone() || ParseMetaData.IsNone() || !IsValid(StyleSheet))
 		{
 			return false;
 		}
@@ -29,9 +29,9 @@ public:
 			const FTextRange& IdRange = RunParseResult.MetaData[ParseMetaData.ToString()];
 			const FString TagName = Text.Mid(IdRange.BeginIndex, IdRange.EndIndex - IdRange.BeginIndex);
 
-			if (Decorator->Chooser.IsValid())
+			if (StyleSheet->Chooser.IsValid())
 			{
-				if (FSchemaDecoratorChooserBase* Chooser = Decorator->Chooser.GetMutablePtr<FSchemaDecoratorChooserBase>())
+				if (FSchemaDecoratorChooserBase* Chooser = StyleSheet->Chooser.GetMutablePtr<FSchemaDecoratorChooserBase>())
 				{
 					return Chooser->GetTargetDataRow(*TagName) != nullptr;
 				}
@@ -47,15 +47,15 @@ protected:
 		FName ParseName = GetParseName();
 		FName ParseMetaData = GetParseMetaData();
 		FString TagName = RunInfo.MetaData[ParseMetaData.ToString()];
-		if (ParseName.IsNone() || ParseMetaData.IsNone())
+		if (ParseName.IsNone() || ParseMetaData.IsNone() || !IsValid(StyleSheet))
 		{
 			return TSharedPtr<SWidget>();
 		}
 
 		FInstancedStructContainerWrapper* TargetDataRow = nullptr;
-		if (Decorator->Chooser.IsValid())
+		if (StyleSheet->Chooser.IsValid())
 		{
-			if (FSchemaDecoratorChooserBase* Chooser = Decorator->Chooser.GetMutablePtr<FSchemaDecoratorChooserBase>())
+			if (FSchemaDecoratorChooserBase* Chooser = StyleSheet->Chooser.GetMutablePtr<FSchemaDecoratorChooserBase>())
 			{
 				TargetDataRow = Chooser->GetTargetDataRow(*TagName);
 			}
@@ -72,7 +72,7 @@ protected:
 			FStructView StructView = *It;
 			if (FSchemaDecoratorOverlayStyleBase* OverlayStyle = StructView.GetPtr<FSchemaDecoratorOverlayStyleBase>())
 			{
-				TSharedPtr<SWidget> Widget = OverlayStyle->GetStyleWidget(Decorator);
+				TSharedPtr<SWidget> Widget = OverlayStyle->GetStyleWidget(StyleSheet);
 				if (Widget.IsValid())
 				{
 					Overlay->AddSlot()
@@ -90,9 +90,9 @@ protected:
 
 	FName GetParseName() const
 	{
-		if (Decorator->Chooser.IsValid())
+		if (StyleSheet->Chooser.IsValid())
 		{
-			if (FSchemaDecoratorChooserBase* Chooser = Decorator->Chooser.GetMutablePtr<FSchemaDecoratorChooserBase>())
+			if (FSchemaDecoratorChooserBase* Chooser = StyleSheet->Chooser.GetMutablePtr<FSchemaDecoratorChooserBase>())
 			{
 				return Chooser->GetParseName();
 			}
@@ -103,9 +103,9 @@ protected:
 
 	FName GetParseMetaData() const
 	{
-		if (Decorator->Chooser.IsValid())
+		if (StyleSheet->Chooser.IsValid())
 		{
-			if (FSchemaDecoratorChooserBase* Chooser = Decorator->Chooser.GetMutablePtr<FSchemaDecoratorChooserBase>())
+			if (FSchemaDecoratorChooserBase* Chooser = StyleSheet->Chooser.GetMutablePtr<FSchemaDecoratorChooserBase>())
 			{
 				return Chooser->GetParseMetaData();
 			}
@@ -115,41 +115,35 @@ protected:
 	}
 
 private:
-	URichTextBlockSchemaDecorator* Decorator;
+	URichTextBlockSchemaDecoratorStyleSheet* StyleSheet;
 };
 
 /////////////////////////////////////////////////////
 // URichTextBlockSchemaDecorator
 URichTextBlockSchemaDecorator::URichTextBlockSchemaDecorator(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
+	, StyleSheet(nullptr)
 {
 }
 
 TSharedPtr<ITextDecorator> URichTextBlockSchemaDecorator::CreateDecorator(URichTextBlock* InOwner)
 {
-	return MakeShareable(new FRichInlineImage(InOwner, this));
-}
-
-/////////////////////////////////////////////////////
-// FInstancedStructContainerWrapper
-FInstancedStructContainerWrapper* FSchemaDecoratorChooserBase::GetTargetDataRow(FName InName)
-{
-	return nullptr;
+	return MakeShareable(new FRichInlineImage(InOwner, StyleSheet));
 }
 
 //////////////////////////////////////////////////////////////////////////
 // Overlay Style
 //////////////////////////////////////////////////////////////////////////
 
-TSharedPtr<SWidget> FSchemaDecoratorOverlayStyle_Text::GetStyleWidget(URichTextBlockSchemaDecorator* Decorator) const
+TSharedPtr<SWidget> FSchemaDecoratorOverlayStyle_Text::GetStyleWidget(URichTextBlockSchemaDecoratorStyleSheet* StyleSheet) const
 {
-	if (!IsValid(Decorator) || !IsValid(Decorator->TextStyle))
+	if (!IsValid(StyleSheet) || !IsValid(StyleSheet->TextStyle))
 	{
 		return TSharedPtr<SWidget>();
 	}
 
 	FString ContextString;
-	if (FRichTextStyleRow* TextStyleRow = Decorator->TextStyle->FindRow<FRichTextStyleRow>(Style, ContextString, true))
+	if (FRichTextStyleRow* TextStyleRow = StyleSheet->TextStyle->FindRow<FRichTextStyleRow>(Style, ContextString, true))
 	{
 		return SNew(STextBlock)
 			.Font(TextStyleRow->TextStyle.Font)
@@ -159,15 +153,15 @@ TSharedPtr<SWidget> FSchemaDecoratorOverlayStyle_Text::GetStyleWidget(URichTextB
 	return TSharedPtr<SWidget>();
 }
 
-TSharedPtr<SWidget> FSchemaDecoratorOverlayStyle_Image::GetStyleWidget(URichTextBlockSchemaDecorator* Decorator) const
+TSharedPtr<SWidget> FSchemaDecoratorOverlayStyle_Image::GetStyleWidget(URichTextBlockSchemaDecoratorStyleSheet* StyleSheet) const
 {
-	if (!IsValid(Decorator) || !IsValid(Decorator->ImageStyle))
+	if (!IsValid(StyleSheet) || !IsValid(StyleSheet->ImageStyle))
 	{
 		return TSharedPtr<SWidget>();
 	}
 
 	FString ContextString;
-	if (FRichImageRow* ImageStyleRow = Decorator->ImageStyle->FindRow<FRichImageRow>(Style, ContextString, true))
+	if (FRichImageRow* ImageStyleRow = StyleSheet->ImageStyle->FindRow<FRichImageRow>(Style, ContextString, true))
 	{
 		return SNew(SImage)
 			.Image(&(ImageStyleRow->Brush));
@@ -176,7 +170,7 @@ TSharedPtr<SWidget> FSchemaDecoratorOverlayStyle_Image::GetStyleWidget(URichText
 	return TSharedPtr<SWidget>();
 }
 
-TSharedPtr<SWidget> FSchemaDecoratorOverlayStyle_UserWidget::GetStyleWidget(URichTextBlockSchemaDecorator* Decorator) const
+TSharedPtr<SWidget> FSchemaDecoratorOverlayStyle_UserWidget::GetStyleWidget(URichTextBlockSchemaDecoratorStyleSheet* StyleSheet) const
 {
 	return TSharedPtr<SWidget>();
 }
@@ -189,6 +183,17 @@ TSharedPtr<SWidget> FSchemaDecoratorOverlayStyle_UserWidget::GetStyleWidget(URic
 //////////////////////////////////////////////////////////////////////////
 // Example
 //////////////////////////////////////////////////////////////////////////
+
+// Common Name Chooser
+FInstancedStructContainerWrapper* FSchemaDecoratorChooser_Common::GetTargetDataRow(FName InName)
+{
+	if (FInstancedStructContainerWrapper* WrapperPtr = Styles.Find(InName))
+	{
+		return WrapperPtr;
+	}
+
+	return nullptr;
+}
 
 // MappingName To Key
 #include "EnhancedInputSubsystems.h"

@@ -17,6 +17,14 @@ class IPropertyHandle;
 class FInstancedStructDetails;
 class ISlateStyle;
 
+UCLASS()
+class INSTANCEDSTRUCTWRAPPEREDITOR_API UInstancedStructSchemaBase : public UObject
+{
+	GENERATED_BODY()
+public:
+	virtual TSharedPtr<SWidget> GetButtonContentOverride(TSharedRef<IPropertyHandle> StructProperty) const;
+};
+
 class FInstancedStructWrapperEditorStyle
 	: public FSlateStyleSet
 {

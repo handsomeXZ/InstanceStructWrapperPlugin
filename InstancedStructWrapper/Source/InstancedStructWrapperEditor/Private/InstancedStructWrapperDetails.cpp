@@ -111,6 +111,11 @@ FPropertyAccess::Result GetStructContainerData(TSharedPtr<IPropertyHandle> Struc
 	return bHasResult ? FPropertyAccess::Success : FPropertyAccess::Fail;
 }
 
+TSharedPtr<SWidget> UInstancedStructSchemaBase::GetButtonContentOverride(TSharedRef<IPropertyHandle> StructProperty) const
+{
+	return nullptr;
+}
+
 FInstancedStructWrapperEditorStyle::FInstancedStructWrapperEditorStyle()
 	: FSlateStyleSet(TEXT("InstancedStructWrapperEditorStyle"))
 {
@@ -354,15 +359,15 @@ void FInstancedStructWrapperDetails::CustomizeValueWidgetBySchema(FDetailWidgetD
 			.HAlign(HAlign_Fill)
 			[
 				SNew(SInlineEditableTextBlock)
-					.Font(IDetailLayoutBuilder::GetDetailFont())
-					.OnVerifyTextChanged_Lambda([](const FText& NewLabel, FText& OutErrorMessage)
-						{
-							return NewLabel.IsEmpty() || !NewLabel.IsEmptyOrWhitespace();	// 允许是空内容
-						})
-					.OnTextCommitted(this, &FInstancedStructWrapperDetails::OnTextCommitted)
-							.Text(this, &FInstancedStructWrapperDetails::GetCommentAsText)
-							.ToolTipText(this, &FInstancedStructWrapperDetails::GetTooltipText)
-							.Justification(ETextJustify::Center)
+				.Font(IDetailLayoutBuilder::GetDetailFont())
+				.OnVerifyTextChanged_Lambda([](const FText& NewLabel, FText& OutErrorMessage)
+					{
+						return NewLabel.IsEmpty() || !NewLabel.IsEmptyOrWhitespace();	// 允许是空内容
+					})
+				.OnTextCommitted(this, &FInstancedStructWrapperDetails::OnTextCommitted)
+				.Text(this, &FInstancedStructWrapperDetails::GetCommentAsText)
+				.ToolTipText(this, &FInstancedStructWrapperDetails::GetTooltipText)
+				.Justification(ETextJustify::Center)
 			];
 	}
 }

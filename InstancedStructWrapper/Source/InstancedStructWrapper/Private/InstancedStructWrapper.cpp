@@ -1,9 +1,5 @@
 ﻿#include "InstancedStructWrapper.h"
 
-#if WITH_EDITOR
-#include "PropertyHandle.h"
-#endif
-
 #define LOCTEXT_NAMESPACE "InstancedStructWrapper"
 
 FInstancedStructWrapper::FInstancedStructWrapper()
@@ -47,14 +43,6 @@ bool FInstancedStructContainerWrapper::Serialize(FArchive& Ar)
 
 	return true;
 }
-
-
-#if WITH_EDITOR
-TSharedPtr<SWidget> UInstancedStructSchemaBase::GetButtonContentOverride(TSharedRef<IPropertyHandle> StructProperty) const
-{
-	return nullptr;
-}
-#endif
 
 
 #undef LOCTEXT_NAMESPACE

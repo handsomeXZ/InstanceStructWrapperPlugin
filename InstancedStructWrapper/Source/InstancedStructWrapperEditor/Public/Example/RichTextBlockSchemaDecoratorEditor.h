@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 
-#include "InstancedStructWrapper.h"
+#include "InstancedStructWrapperDetails.h"
 
 #include "RichTextBlockSchemaDecoratorEditor.generated.h"
 
