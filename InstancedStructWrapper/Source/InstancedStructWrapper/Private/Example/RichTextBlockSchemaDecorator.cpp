@@ -43,7 +43,7 @@ TSharedPtr<SWidget> FSchemaDecoratorOverlayStyle_Text::GetStyleWidget(URichTextB
 	if (FRichTextStyleRow* TextStyleRow = StyleSheet->TextStyle->FindRow<FRichTextStyleRow>(Style, ContextString, true))
 	{
 		return SNew(STextBlock)
-			.Font(TextStyleRow->TextStyle.Font)
+			.TextStyle(&(TextStyleRow->TextStyle))
 			.Text(Text);
 	}
 
