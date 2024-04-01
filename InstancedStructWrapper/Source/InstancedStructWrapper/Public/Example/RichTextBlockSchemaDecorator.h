@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "UObject/ObjectMacros.h"
@@ -84,6 +84,8 @@ struct FSchemaDecoratorOverlayStyle_Text : public FSchemaDecoratorOverlayStyleBa
 	FName Style;
 	UPROPERTY(EditAnywhere, Category = Appearance)
 	FText Text;
+	UPROPERTY(EditAnywhere, Category = Appearance)
+	FMargin Padding;
 
 	virtual TSharedPtr<SWidget> GetStyleWidget(URichTextBlockSchemaDecoratorStyleSheet* StyleSheet) const override;
 	virtual ~FSchemaDecoratorOverlayStyle_Text() {}
@@ -95,6 +97,8 @@ struct FSchemaDecoratorOverlayStyle_Image : public FSchemaDecoratorOverlayStyleB
 	GENERATED_BODY()
 	UPROPERTY(EditAnywhere, Category = Appearance)
 	FName Style;
+	UPROPERTY(EditAnywhere, Category = Appearance)
+	FMargin Padding;
 
 	virtual TSharedPtr<SWidget> GetStyleWidget(URichTextBlockSchemaDecoratorStyleSheet* StyleSheet) const override;
 	virtual ~FSchemaDecoratorOverlayStyle_Image() {}
@@ -106,6 +110,8 @@ struct FSchemaDecoratorOverlayStyle_UserWidget : public FSchemaDecoratorOverlayS
 	GENERATED_BODY()
 	UPROPERTY(EditAnywhere, Category = Appearance)
 	TSubclassOf<UUserWidget> UserWidgetClass;
+	UPROPERTY(EditAnywhere, Category = Appearance)
+	FMargin Padding;
 
 	virtual TSharedPtr<SWidget> GetStyleWidget(URichTextBlockSchemaDecoratorStyleSheet* StyleSheet) const override;
 	virtual ~FSchemaDecoratorOverlayStyle_UserWidget() {}

@@ -1,4 +1,4 @@
-#include "Example/RichTextBlockSchemaDecorator.h"
+﻿#include "Example/RichTextBlockSchemaDecorator.h"
 
 #include "Widgets/SOverlay.h"
 #include "Components/RichTextBlock.h"
@@ -20,7 +20,7 @@ public:
 	{
 		FName ParseName = GetParseName();
 		FName ParseMetaData = GetParseMetaData();
-		if (ParseName.IsNone() || ParseMetaData.IsNone() || !IsValid(StyleSheet))
+		if (ParseName.IsNone() || ParseMetaData.IsNone() || !IsValidData())
 		{
 			return false;
 		}
@@ -30,12 +30,9 @@ public:
 			const FTextRange& IdRange = RunParseResult.MetaData[ParseMetaData.ToString()];
 			const FString TagName = Text.Mid(IdRange.BeginIndex, IdRange.EndIndex - IdRange.BeginIndex);
 
-			if (StyleSheet->Chooser.IsValid())
+			if (FSchemaDecoratorChooserBase* Chooser = StyleSheet->Chooser.GetMutablePtr<FSchemaDecoratorChooserBase>())
 			{
-				if (FSchemaDecoratorChooserBase* Chooser = StyleSheet->Chooser.GetMutablePtr<FSchemaDecoratorChooserBase>())
-				{
-					return Chooser->GetTargetDataRow(*TagName) != nullptr;
-				}
+				return Chooser->GetTargetDataRow(*TagName) != nullptr;
 			}
 		}
 
@@ -48,18 +45,15 @@ protected:
 		FName ParseName = GetParseName();
 		FName ParseMetaData = GetParseMetaData();
 		FString TagName = RunInfo.MetaData[ParseMetaData.ToString()];
-		if (ParseName.IsNone() || ParseMetaData.IsNone() || !IsValid(StyleSheet))
+		if (ParseName.IsNone() || ParseMetaData.IsNone() || !IsValidData())
 		{
 			return TSharedPtr<SWidget>();
 		}
 
 		FInstancedStructContainerWrapper* TargetDataRow = nullptr;
-		if (StyleSheet->Chooser.IsValid())
+		if (FSchemaDecoratorChooserBase* Chooser = StyleSheet->Chooser.GetMutablePtr<FSchemaDecoratorChooserBase>())
 		{
-			if (FSchemaDecoratorChooserBase* Chooser = StyleSheet->Chooser.GetMutablePtr<FSchemaDecoratorChooserBase>())
-			{
-				TargetDataRow = Chooser->GetTargetDataRow(*TagName);
-			}
+			TargetDataRow = Chooser->GetTargetDataRow(*TagName);
 		}
 
 		if (!TargetDataRow)
@@ -91,7 +85,7 @@ protected:
 
 	FName GetParseName() const
 	{
-		if (StyleSheet->Chooser.IsValid())
+		if (IsValidData())
 		{
 			if (FSchemaDecoratorChooserBase* Chooser = StyleSheet->Chooser.GetMutablePtr<FSchemaDecoratorChooserBase>())
 			{
@@ -104,7 +98,7 @@ protected:
 
 	FName GetParseMetaData() const
 	{
-		if (StyleSheet->Chooser.IsValid())
+		if (IsValidData())
 		{
 			if (FSchemaDecoratorChooserBase* Chooser = StyleSheet->Chooser.GetMutablePtr<FSchemaDecoratorChooserBase>())
 			{
@@ -113,6 +107,11 @@ protected:
 		}
 
 		return NAME_None;
+	}
+
+	bool IsValidData() const
+	{
+		return IsValid(StyleSheet) && StyleSheet->Chooser.IsValid();
 	}
 
 private:
@@ -146,9 +145,14 @@ TSharedPtr<SWidget> FSchemaDecoratorOverlayStyle_Text::GetStyleWidget(URichTextB
 	FString ContextString;
 	if (FRichTextStyleRow* TextStyleRow = StyleSheet->TextStyle->FindRow<FRichTextStyleRow>(Style, ContextString, true))
 	{
-		return SNew(STextBlock)
-			.Font(TextStyleRow->TextStyle.Font)
-			.Text(Text);
+		return SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.Padding(Padding)
+			[
+				SNew(STextBlock)
+				.Font(TextStyleRow->TextStyle.Font)
+				.Text(Text)
+			];
 	}
 
 	return TSharedPtr<SWidget>();
@@ -164,8 +168,13 @@ TSharedPtr<SWidget> FSchemaDecoratorOverlayStyle_Image::GetStyleWidget(URichText
 	FString ContextString;
 	if (FRichImageRow* ImageStyleRow = StyleSheet->ImageStyle->FindRow<FRichImageRow>(Style, ContextString, true))
 	{
-		return SNew(SImage)
-			.Image(&(ImageStyleRow->Brush));
+		return SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.Padding(Padding)
+			[
+				SNew(SImage)
+				.Image(&(ImageStyleRow->Brush))
+			];
 	}
 
 	return TSharedPtr<SWidget>();
@@ -180,7 +189,12 @@ TSharedPtr<SWidget> FSchemaDecoratorOverlayStyle_UserWidget::GetStyleWidget(URic
 
 	if (UUserWidget* Widget = NewObject<UUserWidget>(GetTransientPackage(), UserWidgetClass))
 	{
-		return Widget->TakeWidget();
+		return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot()
+		.Padding(Padding)
+		[
+			Widget->TakeWidget()
+		];
 	}
 
 	return TSharedPtr<SWidget>();
