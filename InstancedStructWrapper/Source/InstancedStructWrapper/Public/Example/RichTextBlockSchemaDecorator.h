@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "UObject/ObjectMacros.h"
@@ -10,6 +10,7 @@
 #include "Framework/Text/ITextDecorator.h"
 #include "Components/RichTextBlockDecorator.h"
 #include "Engine/DataTable.h"
+#include "Example/RichTextBlockSchemaRun.h"
 
 #include "InstancedStructWrapper.h"
 
@@ -21,7 +22,7 @@ class ISlateStyle;
 // 这里不得不将 Decorator 和 StyleSheet分开定义，因为每个RichTextBlock都会实例化一份 Decorator
 //----------------------------------------------------------------------------------------
 
-// Decorator 提供组装Slate的功能
+// Decorator 提供组装Slate的功能（每个Decorator都会由RichTextBlock实例化）
 UCLASS(Abstract, Blueprintable)
 class INSTANCEDSTRUCTWRAPPER_API URichTextBlockSchemaDecorator : public URichTextBlockDecorator
 {
@@ -30,10 +31,22 @@ class INSTANCEDSTRUCTWRAPPER_API URichTextBlockSchemaDecorator : public URichTex
 public:
 	URichTextBlockSchemaDecorator(const FObjectInitializer& ObjectInitializer);
 
+	UFUNCTION(BlueprintCallable, Category = "SchemaDecorator")
+	void SetEnableSlateForwardExtension(bool bIsEnable) { bIsEnableSlateForwardExtension = bIsEnable; }
+	UFUNCTION(BlueprintCallable, Category = "SchemaDecorator")
+	void SetEnableSlateBackwardExtension(bool bIsEnable) { bIsEnableSlateBackwardExtension = bIsEnable; }
+	UFUNCTION(BlueprintPure, Category = "SchemaDecorator")
+	bool IsEnableSlateForwardExtension() const { return bIsEnableSlateForwardExtension; }
+	UFUNCTION(BlueprintPure, Category = "SchemaDecorator")
+	bool IsEnableSlateBackwardExtension() const { return bIsEnableSlateBackwardExtension; }
+	
 	virtual TSharedPtr<ITextDecorator> CreateDecorator(URichTextBlock* InOwner) override;
 public:
 	UPROPERTY(EditAnywhere, Category = Schema, meta = (ExcludeBaseStruct, BaseStruct = "/Script/InstancedStructWrapper.SchemaDecoratorChooserBase"))
 	TObjectPtr<URichTextBlockSchemaDecoratorStyleSheet> StyleSheet;
+
+	bool bIsEnableSlateForwardExtension;
+	bool bIsEnableSlateBackwardExtension;
 };
 
 // StyleSheet 提供用于组装Slate的数据
@@ -52,6 +65,10 @@ public:
 	TObjectPtr<class UDataTable> ImageStyle;
 	UPROPERTY(EditAnywhere, Category = Appearance, meta = (RequiredAssetDataTags = "RowStructure=/Script/UMG.RichTextStyleRow"))
 	TObjectPtr<class UDataTable> TextStyle;
+
+	// 适合用于自定义删除线
+	UPROPERTY(EditAnywhere, Category = Appearance)
+	FSchemaSlateExtensionStyle SlateExtensionStyle;
 };
 
 // Chooser 提供筛选组装所需数据的规则
@@ -84,8 +101,6 @@ struct FSchemaDecoratorOverlayStyle_Text : public FSchemaDecoratorOverlayStyleBa
 	FName Style;
 	UPROPERTY(EditAnywhere, Category = Appearance)
 	FText Text;
-	UPROPERTY(EditAnywhere, Category = Appearance)
-	FMargin Padding;
 
 	virtual TSharedPtr<SWidget> GetStyleWidget(URichTextBlockSchemaDecoratorStyleSheet* StyleSheet) const override;
 	virtual ~FSchemaDecoratorOverlayStyle_Text() {}
@@ -97,8 +112,6 @@ struct FSchemaDecoratorOverlayStyle_Image : public FSchemaDecoratorOverlayStyleB
 	GENERATED_BODY()
 	UPROPERTY(EditAnywhere, Category = Appearance)
 	FName Style;
-	UPROPERTY(EditAnywhere, Category = Appearance)
-	FMargin Padding;
 
 	virtual TSharedPtr<SWidget> GetStyleWidget(URichTextBlockSchemaDecoratorStyleSheet* StyleSheet) const override;
 	virtual ~FSchemaDecoratorOverlayStyle_Image() {}
@@ -110,8 +123,6 @@ struct FSchemaDecoratorOverlayStyle_UserWidget : public FSchemaDecoratorOverlayS
 	GENERATED_BODY()
 	UPROPERTY(EditAnywhere, Category = Appearance)
 	TSubclassOf<UUserWidget> UserWidgetClass;
-	UPROPERTY(EditAnywhere, Category = Appearance)
-	FMargin Padding;
 
 	virtual TSharedPtr<SWidget> GetStyleWidget(URichTextBlockSchemaDecoratorStyleSheet* StyleSheet) const override;
 	virtual ~FSchemaDecoratorOverlayStyle_UserWidget() {}
