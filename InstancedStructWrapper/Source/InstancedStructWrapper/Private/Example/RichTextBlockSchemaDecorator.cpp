@@ -1,4 +1,4 @@
-#include "Example/RichTextBlockSchemaDecorator.h"
+﻿#include "Example/RichTextBlockSchemaDecorator.h"
 
 #include "Widgets/SOverlay.h"
 #include "Components/RichTextBlock.h"
@@ -12,8 +12,8 @@
 URichTextBlockSchemaDecorator::URichTextBlockSchemaDecorator(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 	, StyleSheet(nullptr)
-	, bIsEnableSlateForwardExtension(false)
-	, bIsEnableSlateBackwardExtension(false)
+	, ForwardAdditionSet(0)
+	, BackwardAdditionSet(0)
 {
 }
 
@@ -21,11 +21,98 @@ TSharedPtr<ITextDecorator> URichTextBlockSchemaDecorator::CreateDecorator(URichT
 {
 	if (IsValid(StyleSheet))
 	{
-		bIsEnableSlateForwardExtension = StyleSheet->SlateExtensionStyle.ForwardAddition.bDefaultEnable;
-		bIsEnableSlateBackwardExtension = StyleSheet->SlateExtensionStyle.BackwardAddition.bDefaultEnable;
+		uint32 Id = 1;
+		for (auto It = StyleSheet->ForwardAddition.begin(); It; ++It)
+		{
+			FStructView StructView = *It;
+			if (FSchemaSlateAdditionRenderer* AdditionRenderer = StructView.GetPtr<FSchemaSlateAdditionRenderer>())
+			{
+				if (AdditionRenderer->bDefaultEnable)
+				{
+					ForwardAdditionSet |= Id;
+				}
+			}
+
+			Id *= 2;
+			if (Id > 32)
+			{
+				break;
+			}
+		}
+
+		Id = 1;
+		for (auto It = StyleSheet->BackwardAddition.begin(); It; ++It)
+		{
+			FStructView StructView = *It;
+			if (FSchemaSlateAdditionRenderer* AdditionRenderer = StructView.GetPtr<FSchemaSlateAdditionRenderer>())
+			{
+				if (AdditionRenderer->bDefaultEnable)
+				{
+					BackwardAdditionSet |= Id;
+				}
+			}
+
+			Id *= 2;
+			if (Id > 32)
+			{
+				break;
+			}
+		}
 	}
 
 	return MakeShared<FRichSchemaDecorator>(InOwner, StyleSheet, this);
+}
+
+void URichTextBlockSchemaDecorator::SetEnableSlateForwardExtension(bool bIsEnable, int32 Index)
+{
+	if (bIsEnable)
+	{
+		ForwardAdditionSet |= (1 << (uint32)Index);
+	}
+	else
+	{
+		ForwardAdditionSet &= (0 ^ (1 << (uint32)Index));
+	}
+
+	ForwardPayloadMap.Remove(Index + 1);
+}
+
+void URichTextBlockSchemaDecorator::SetEnableSlateBackwardExtension(bool bIsEnable, int32 Index)
+{
+	if (bIsEnable)
+	{
+		BackwardAdditionSet |= (1 << (uint32)Index);
+	}
+	else
+	{
+		BackwardAdditionSet &= (0 ^ (1 << (uint32)Index));
+	}
+
+	ForwardPayloadMap.Remove(Index + 1);
+}
+
+void URichTextBlockSchemaDecorator::EnableSlateForwardExtensionWithPayload(int32 Index, FInstancedStruct Payload)
+{
+	ForwardAdditionSet |= (1 << (uint32)Index);
+
+	ForwardPayloadMap.Add(Index + 1, Payload);
+}
+
+void URichTextBlockSchemaDecorator::EnableSlateBackwardExtensionWithPayload(int32 Index, FInstancedStruct Payload)
+{
+	BackwardAdditionSet |= (1 << (uint32)Index);
+
+	BackwardPayloadMap.Add(Index + 1, Payload);
+}
+
+bool URichTextBlockSchemaDecorator::IsEnableSlateForwardExtension(int32 Index) const
+{
+	return ForwardAdditionSet & (1 << (uint32)Index);
+}
+
+bool URichTextBlockSchemaDecorator::IsEnableSlateBackwardExtension(int32 Index) const
+{
+	return BackwardAdditionSet & (1 << (uint32)Index);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -42,9 +129,14 @@ TSharedPtr<SWidget> FSchemaDecoratorOverlayStyle_Text::GetStyleWidget(URichTextB
 	FString ContextString;
 	if (FRichTextStyleRow* TextStyleRow = StyleSheet->TextStyle->FindRow<FRichTextStyleRow>(Style, ContextString, true))
 	{
-		return SNew(STextBlock)
-			.TextStyle(&(TextStyleRow->TextStyle))
-			.Text(Text);
+		return SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.Padding(Padding)
+			[
+				SNew(STextBlock)
+				.TextStyle(&(TextStyleRow->TextStyle))
+				.Text(Text)
+			];
 	}
 
 	return TSharedPtr<SWidget>();
@@ -60,8 +152,13 @@ TSharedPtr<SWidget> FSchemaDecoratorOverlayStyle_Image::GetStyleWidget(URichText
 	FString ContextString;
 	if (FRichImageRow* ImageStyleRow = StyleSheet->ImageStyle->FindRow<FRichImageRow>(Style, ContextString, true))
 	{
-		return SNew(SImage)
-			.Image(&(ImageStyleRow->Brush));
+		return SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.Padding(Padding)
+			[
+				SNew(SImage)
+				.Image(&(ImageStyleRow->Brush))
+			];
 	}
 
 	return TSharedPtr<SWidget>();
@@ -76,7 +173,12 @@ TSharedPtr<SWidget> FSchemaDecoratorOverlayStyle_UserWidget::GetStyleWidget(URic
 
 	if (UUserWidget* Widget = NewObject<UUserWidget>(GetTransientPackage(), UserWidgetClass))
 	{
-		return Widget->TakeWidget();
+		return SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.Padding(Padding)
+			[
+				Widget->TakeWidget()
+			];
 	}
 
 	return TSharedPtr<SWidget>();

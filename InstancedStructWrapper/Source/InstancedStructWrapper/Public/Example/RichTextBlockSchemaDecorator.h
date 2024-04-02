@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "UObject/ObjectMacros.h"
@@ -31,22 +31,42 @@ class INSTANCEDSTRUCTWRAPPER_API URichTextBlockSchemaDecorator : public URichTex
 public:
 	URichTextBlockSchemaDecorator(const FObjectInitializer& ObjectInitializer);
 
+	// 暂时以int32为索引，后续考虑加入MapWrapper
+
+
+	// （Beta）动态开关仍处于开发阶段
 	UFUNCTION(BlueprintCallable, Category = "SchemaDecorator")
-	void SetEnableSlateForwardExtension(bool bIsEnable) { bIsEnableSlateForwardExtension = bIsEnable; }
+	void SetEnableSlateForwardExtension(bool bIsEnable, int32 Index);
+	// （Beta）动态开关仍处于开发阶段
 	UFUNCTION(BlueprintCallable, Category = "SchemaDecorator")
-	void SetEnableSlateBackwardExtension(bool bIsEnable) { bIsEnableSlateBackwardExtension = bIsEnable; }
+	void SetEnableSlateBackwardExtension(bool bIsEnable, int32 Index);
+	// （Beta）动态开关和动态参数仍处于开发阶段
+	UFUNCTION(BlueprintCallable, Category = "SchemaDecorator")
+	void EnableSlateForwardExtensionWithPayload(int32 Index, FInstancedStruct Payload);
+	// （Beta）动态开关和动态参数仍处于开发阶段
+	UFUNCTION(BlueprintCallable, Category = "SchemaDecorator")
+	void EnableSlateBackwardExtensionWithPayload(int32 Index, FInstancedStruct Payload);
 	UFUNCTION(BlueprintPure, Category = "SchemaDecorator")
-	bool IsEnableSlateForwardExtension() const { return bIsEnableSlateForwardExtension; }
+	bool IsEnableSlateForwardExtension(int32 Index) const;
 	UFUNCTION(BlueprintPure, Category = "SchemaDecorator")
-	bool IsEnableSlateBackwardExtension() const { return bIsEnableSlateBackwardExtension; }
+	bool IsEnableSlateBackwardExtension(int32 Index) const;
 	
 	virtual TSharedPtr<ITextDecorator> CreateDecorator(URichTextBlock* InOwner) override;
 public:
+	friend struct FSchemaDecoratorProxy;
+
 	UPROPERTY(EditAnywhere, Category = Schema, meta = (ExcludeBaseStruct, BaseStruct = "/Script/InstancedStructWrapper.SchemaDecoratorChooserBase"))
 	TObjectPtr<URichTextBlockSchemaDecoratorStyleSheet> StyleSheet;
 
-	bool bIsEnableSlateForwardExtension;
-	bool bIsEnableSlateBackwardExtension;
+	// 默认支持32个附加渲染器
+	uint32 ForwardAdditionSet;
+	uint32 BackwardAdditionSet;
+
+	// 为ForwardAddition和BackwardAddition提供传参
+	UPROPERTY(Transient)
+	TMap<int32, FInstancedStruct> ForwardPayloadMap;
+	UPROPERTY(Transient)
+	TMap<int32, FInstancedStruct> BackwardPayloadMap;
 };
 
 // StyleSheet 提供用于组装Slate的数据
@@ -66,9 +86,12 @@ public:
 	UPROPERTY(EditAnywhere, Category = Appearance, meta = (RequiredAssetDataTags = "RowStructure=/Script/UMG.RichTextStyleRow"))
 	TObjectPtr<class UDataTable> TextStyle;
 
-	// 适合用于自定义删除线
-	UPROPERTY(EditAnywhere, Category = Appearance)
-	FSchemaSlateExtensionStyle SlateExtensionStyle;
+	// 默认支持32个附加渲染器
+	UPROPERTY(EditAnywhere, Category = Appearance, AdvancedDisplay, meta = (ExcludeBaseStruct, BaseStruct = "/Script/InstancedStructWrapper.SchemaSlateAdditionRenderer"))
+	FInstancedStructContainerWrapper ForwardAddition;
+	// 默认支持32个附加渲染器
+	UPROPERTY(EditAnywhere, Category = Appearance, AdvancedDisplay, meta = (ExcludeBaseStruct, BaseStruct = "/Script/InstancedStructWrapper.SchemaSlateAdditionRenderer"))
+	FInstancedStructContainerWrapper BackwardAddition;
 };
 
 // Chooser 提供筛选组装所需数据的规则
@@ -101,6 +124,8 @@ struct FSchemaDecoratorOverlayStyle_Text : public FSchemaDecoratorOverlayStyleBa
 	FName Style;
 	UPROPERTY(EditAnywhere, Category = Appearance)
 	FText Text;
+	UPROPERTY(EditAnywhere, Category = Appearance)
+	FMargin Padding;
 
 	virtual TSharedPtr<SWidget> GetStyleWidget(URichTextBlockSchemaDecoratorStyleSheet* StyleSheet) const override;
 	virtual ~FSchemaDecoratorOverlayStyle_Text() {}
@@ -112,6 +137,8 @@ struct FSchemaDecoratorOverlayStyle_Image : public FSchemaDecoratorOverlayStyleB
 	GENERATED_BODY()
 	UPROPERTY(EditAnywhere, Category = Appearance)
 	FName Style;
+	UPROPERTY(EditAnywhere, Category = Appearance)
+	FMargin Padding;
 
 	virtual TSharedPtr<SWidget> GetStyleWidget(URichTextBlockSchemaDecoratorStyleSheet* StyleSheet) const override;
 	virtual ~FSchemaDecoratorOverlayStyle_Image() {}
@@ -123,6 +150,8 @@ struct FSchemaDecoratorOverlayStyle_UserWidget : public FSchemaDecoratorOverlayS
 	GENERATED_BODY()
 	UPROPERTY(EditAnywhere, Category = Appearance)
 	TSubclassOf<UUserWidget> UserWidgetClass;
+	UPROPERTY(EditAnywhere, Category = Appearance)
+	FMargin Padding;
 
 	virtual TSharedPtr<SWidget> GetStyleWidget(URichTextBlockSchemaDecoratorStyleSheet* StyleSheet) const override;
 	virtual ~FSchemaDecoratorOverlayStyle_UserWidget() {}
