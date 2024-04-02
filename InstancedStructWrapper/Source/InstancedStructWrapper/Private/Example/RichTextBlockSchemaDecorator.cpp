@@ -12,8 +12,7 @@
 URichTextBlockSchemaDecorator::URichTextBlockSchemaDecorator(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 	, StyleSheet(nullptr)
-	, ForwardAdditionSet(0)
-	, BackwardAdditionSet(0)
+	, SlateAdditionRun(nullptr)
 {
 }
 
@@ -21,98 +20,30 @@ TSharedPtr<ITextDecorator> URichTextBlockSchemaDecorator::CreateDecorator(URichT
 {
 	if (IsValid(StyleSheet))
 	{
-		uint32 Id = 1;
-		for (auto It = StyleSheet->ForwardAddition.begin(); It; ++It)
-		{
-			FStructView StructView = *It;
-			if (FSchemaSlateAdditionRenderer* AdditionRenderer = StructView.GetPtr<FSchemaSlateAdditionRenderer>())
-			{
-				if (AdditionRenderer->bDefaultEnable)
-				{
-					ForwardAdditionSet |= Id;
-				}
-			}
-
-			Id *= 2;
-			if (Id > 32)
-			{
-				break;
-			}
-		}
-
-		Id = 1;
-		for (auto It = StyleSheet->BackwardAddition.begin(); It; ++It)
-		{
-			FStructView StructView = *It;
-			if (FSchemaSlateAdditionRenderer* AdditionRenderer = StructView.GetPtr<FSchemaSlateAdditionRenderer>())
-			{
-				if (AdditionRenderer->bDefaultEnable)
-				{
-					BackwardAdditionSet |= Id;
-				}
-			}
-
-			Id *= 2;
-			if (Id > 32)
-			{
-				break;
-			}
-		}
-	}
-
-	return MakeShared<FRichSchemaDecorator>(InOwner, StyleSheet, this);
-}
-
-void URichTextBlockSchemaDecorator::SetEnableSlateForwardExtension(bool bIsEnable, int32 Index)
-{
-	if (bIsEnable)
-	{
-		ForwardAdditionSet |= (1 << (uint32)Index);
+		SlateAdditionRun = MakeShared<FSlateAdditionRun>(StyleSheet);
 	}
 	else
 	{
-		ForwardAdditionSet &= (0 ^ (1 << (uint32)Index));
+		SlateAdditionRun = nullptr;
 	}
 
-	ForwardPayloadMap.Remove(Index + 1);
+	return MakeShared<FRichSchemaDecorator>(InOwner, StyleSheet, SlateAdditionRun);
 }
 
-void URichTextBlockSchemaDecorator::SetEnableSlateBackwardExtension(bool bIsEnable, int32 Index)
+void URichTextBlockSchemaDecorator::SetSlateAdditionBrush(ESlateAdditionRendererType Type, int32 Index, FSlateBrush Brush)
 {
-	if (bIsEnable)
+	if (SlateAdditionRun.IsValid())
 	{
-		BackwardAdditionSet |= (1 << (uint32)Index);
+		SlateAdditionRun->SetBrush(Type, Index, Brush);
 	}
-	else
+}
+
+void URichTextBlockSchemaDecorator::SetSlateAdditionStatus(ESlateAdditionRendererType Type, int32 Index, bool bIsEnable)
+{
+	if (SlateAdditionRun.IsValid())
 	{
-		BackwardAdditionSet &= (0 ^ (1 << (uint32)Index));
+		SlateAdditionRun->SetEnable(Type, Index, bIsEnable);
 	}
-
-	ForwardPayloadMap.Remove(Index + 1);
-}
-
-void URichTextBlockSchemaDecorator::EnableSlateForwardExtensionWithPayload(int32 Index, FInstancedStruct Payload)
-{
-	ForwardAdditionSet |= (1 << (uint32)Index);
-
-	ForwardPayloadMap.Add(Index + 1, Payload);
-}
-
-void URichTextBlockSchemaDecorator::EnableSlateBackwardExtensionWithPayload(int32 Index, FInstancedStruct Payload)
-{
-	BackwardAdditionSet |= (1 << (uint32)Index);
-
-	BackwardPayloadMap.Add(Index + 1, Payload);
-}
-
-bool URichTextBlockSchemaDecorator::IsEnableSlateForwardExtension(int32 Index) const
-{
-	return ForwardAdditionSet & (1 << (uint32)Index);
-}
-
-bool URichTextBlockSchemaDecorator::IsEnableSlateBackwardExtension(int32 Index) const
-{
-	return BackwardAdditionSet & (1 << (uint32)Index);
 }
 
 //////////////////////////////////////////////////////////////////////////

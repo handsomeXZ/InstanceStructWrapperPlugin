@@ -13,40 +13,11 @@ PRIVATE_DEFINE(FCharacterList, FSlateFontKey, FontKey);
 PRIVATE_DEFINE(FSlateWidgetRun, TSharedRef<const FString>, Text, SlateWidgetRun);
 PRIVATE_DEFINE(FSlateTextRun, TSharedRef<const FString>, Text, SlateTextRun);
 
-static const TMap<int32, FInstancedStruct> EmptyPayload;
-
-uint32 FSchemaDecoratorProxy::GetForwardAdditionSet()
+FRichSchemaDecorator::FRichSchemaDecorator(URichTextBlock* InOwnerBlock, URichTextBlockSchemaDecoratorStyleSheet* InStyleSheet, TSharedPtr<FSlateAdditionRun> InSlateAdditionRun)
+	: OwnerBlock(InOwnerBlock)
+	, StyleSheet(InStyleSheet)
+	, SlateAdditionRun(InSlateAdditionRun)
 {
-	if (OwnerDecorator.IsValid())
-	{
-		return OwnerDecorator.Get()->ForwardAdditionSet;
-	}
-	return 0;
-}
-uint32 FSchemaDecoratorProxy::GetBackwardAdditionSet()
-{
-	if (OwnerDecorator.IsValid())
-	{
-		return OwnerDecorator.Get()->BackwardAdditionSet;
-	}
-	return 0;
-}
-const TMap<int32, FInstancedStruct>& FSchemaDecoratorProxy::GetForwardPayloadMap()
-{
-	if (OwnerDecorator.IsValid())
-	{
-		return OwnerDecorator.Get()->ForwardPayloadMap;
-	}
-
-	return EmptyPayload;
-}
-const TMap<int32, FInstancedStruct>& FSchemaDecoratorProxy::GetBackwardPayloadMap()
-{
-	if (OwnerDecorator.IsValid())
-	{
-		return OwnerDecorator.Get()->BackwardPayloadMap;
-	}
-	return EmptyPayload;
 }
 
 bool FRichSchemaDecorator::Supports(const FTextRunParseResults& RunParseResult, const FString& Text) const
@@ -107,8 +78,6 @@ TSharedRef<ISlateRun> FRichSchemaDecorator::Create(const TSharedRef<class FTextL
 		RunInfo.MetaData.Add(Pair.Key, OriginalText.Mid(Pair.Value.BeginIndex, Pair.Value.EndIndex - Pair.Value.BeginIndex));
 	}
 
-	TSharedPtr<FSchemaSlateRunExtension> SlateRunExtension = CreateSlateRunExtension();
-
 	const FTextBlockStyle& TextStyle = OwnerBlock->GetCurrentDefaultTextStyle();
 
 	TSharedPtr<ISlateRun> SlateRun;
@@ -132,7 +101,7 @@ TSharedRef<ISlateRun> FRichSchemaDecorator::Create(const TSharedRef<class FTextL
 			});
 
 		FSlateWidgetRun::FWidgetRunInfo WidgetRunInfo(DecoratorWidget.ToSharedRef(), GetBaseline);
-		SlateRun = FSchemaSlateWidgetRun::Create(SlateRunExtension.ToSharedRef(), TextLayout, RunInfo, InOutModelText, WidgetRunInfo, ModelRange);
+		SlateRun = FSchemaSlateWidgetRun::Create(SlateAdditionRun, TextLayout, RunInfo, InOutModelText, WidgetRunInfo, ModelRange);
 	}
 	else
 	{
@@ -141,7 +110,7 @@ TSharedRef<ISlateRun> FRichSchemaDecorator::Create(const TSharedRef<class FTextL
 		CreateDecoratorText(RunParseResult, OriginalText, TempStyle, *InOutModelText);
 
 		ModelRange.EndIndex = InOutModelText->Len();
-		SlateRun = FSchemaSlateTextRun::Create(SlateRunExtension.ToSharedRef(), RunInfo, InOutModelText, TempStyle, ModelRange);
+		SlateRun = FSchemaSlateTextRun::Create(SlateAdditionRun, RunInfo, InOutModelText, TempStyle, ModelRange);
 	}
 
 	return SlateRun.ToSharedRef();
@@ -210,14 +179,9 @@ void FRichSchemaDecorator::CreateDecoratorText(const FTextRunParseResults& RunPa
 	}
 }
 
-TSharedPtr<FSchemaSlateRunExtension> FRichSchemaDecorator::CreateSlateRunExtension()
-{
-	return MakeShared<FSchemaSlateRunExtension>(StyleSheet->ForwardAddition, StyleSheet->BackwardAddition, OwnerSchemaDecorator);
-}
-
 bool FRichSchemaDecorator::IsValidData() const
 {
-	return IsValid(OwnerBlock) && IsValid(StyleSheet) && StyleSheet->Chooser.IsValid() && IsValid(OwnerSchemaDecorator);
+	return IsValid(OwnerBlock) && IsValid(StyleSheet) && StyleSheet->Chooser.IsValid();
 }
 
 FName FRichSchemaDecorator::GetParseName() const
@@ -249,8 +213,8 @@ FName FRichSchemaDecorator::GetParseMetaData() const
 
 
 //////////////////////////////////////////////////////////////////////////
-FSchemaSlateAdditionRendererParam::FSchemaSlateAdditionRendererParam(const TSharedRef<const FString>& InContentText)
-	: ContentText(InContentText)
+FSchemaSlateAdditionRendererParam::FSchemaSlateAdditionRendererParam()
+	: Brush(nullptr)
 {
 
 }
@@ -258,8 +222,7 @@ FSchemaSlateAdditionRendererParam::FSchemaSlateAdditionRendererParam(const TShar
 
 FSchemaSlateAdditionRendererParam PrepareParams(const FTextArgs& TextArgs, const TSharedRef<const FString>& ContentText, const FTextRange& TextRange)
 {
-	FSchemaSlateAdditionRendererParam Params(ContentText);
-	Params.TextRange = TextRange;
+	FSchemaSlateAdditionRendererParam Params;
 
 	for (int32 index = 0; index < TextArgs.Line.Blocks.Num(); ++index)
 	{
@@ -293,13 +256,13 @@ FSchemaSlateAdditionRendererParam PrepareParams(const FTextArgs& TextArgs, const
 
 
 
-void FSchemaSlateAdditionRenderer::GetExtensionMetrics(EHorizontalAlignment HAlign, EVerticalAlignment VAlign, FMargin Padding, FVector2f BrushSize, const FTextArgs& TextArgs, const float InFontScale, float& OutLineThickness, FVector2f& Offset, float& Width) const
+void GetExtensionMetrics(EHorizontalAlignment HAlign, EVerticalAlignment VAlign, FMargin Padding, FVector2f BrushSize, const FTextArgs& TextArgs, const float InFontScale, float& OutLineThickness, FVector2f& Offset, float& Width)
 {
 	TSharedRef<FSlateFontCache> FontCache = FSlateApplication::Get().GetRenderer()->GetFontCache();
 	FSlateFontInfo FontInfo;
 
 	float MaxHeight = FontCache->GetMaxCharacterHeight(TextArgs.DefaultStyle.Font, InFontScale);
-	float Baseline = FontCache->GetBaseline(TextArgs.DefaultStyle.Font, InFontScale);
+	//float Baseline = FontCache->GetBaseline(TextArgs.DefaultStyle.Font, InFontScale);
 	FCharacterList& CharacterList = FontCache->GetCharacterList(FontInfo, InFontScale);
 
 	// 获取缩放比
@@ -339,8 +302,8 @@ void FSchemaSlateAdditionRenderer::GetExtensionMetrics(EHorizontalAlignment HAli
 	switch (VAlign)
 	{
 	case VAlign_Center: {
-		Top = (MaxHeight - Baseline) / 2.0 - BrushSize.Y / 2.0 * Scale;
-		Bottom = (MaxHeight - Baseline) / 2.0 + BrushSize.Y / 2.0 * Scale;
+		Top = (MaxHeight /*- Baseline*/) / 2.0 - BrushSize.Y / 2.0 * Scale;
+		Bottom = (MaxHeight /*- Baseline*/) / 2.0 + BrushSize.Y / 2.0 * Scale;
 		break;
 	}
 	default: {
@@ -369,16 +332,7 @@ int32 FSchemaSlateAdditionRenderer_Brush_MultiLine::OnPaint(const FSchemaSlateAd
 	FVector2f Offset;
 	float Width = TextArgs.Line.Size.X;
 
-	FSlateBrush UsedBrush = Brush;
-
-	if (Params.Payload && Params.Payload->IsValid())
-	{
-		const FSlateAdditionCommonPayload* Payload = Params.Payload->GetPtr<const FSlateAdditionCommonPayload>();
-
-		UsedBrush = Payload->BrushOverride;
-	}
-
-	GetExtensionMetrics(HAlign, VAlign, Padding, UsedBrush.ImageSize, TextArgs, AllottedGeometry.Scale, LineThickness, Offset, Width);
+	GetExtensionMetrics(HAlign, VAlign, Padding, Params.Brush->ImageSize, TextArgs, AllottedGeometry.Scale, LineThickness, Offset, Width);
 
 	const FVector2f Location(TextArgs.Line.Offset.X + Offset.X, TextArgs.Line.Offset.Y + Offset.Y);
 	const FVector2f Size(Width, FMath::Max<int16>(1, LineThickness));
@@ -388,42 +342,16 @@ int32 FSchemaSlateAdditionRenderer_Brush_MultiLine::OnPaint(const FSchemaSlateAd
 
 	if (Size.X)
 	{
-		const FLinearColor LineColorAndOpacity = TextArgs.DefaultStyle.ColorAndOpacity.GetColor(InWidgetStyle);
-		UE::Slate::FDeprecateVector2DResult ShadowOffset = TextArgs.DefaultStyle.ShadowOffset;
-
-		const bool ShouldDropShadow = TextArgs.DefaultStyle.ShadowColorAndOpacity.A > 0.f && ShadowOffset.SizeSquared() > 0.f;
-
-		// A negative shadow offset should be applied as a positive offset to the underline to avoid clipping issues
-		const FVector2f DrawShadowOffset(
-			(ShadowOffset.X > 0.0f) ? ShadowOffset.X * AllottedGeometry.Scale : 0.0f,
-			(ShadowOffset.Y > 0.0f) ? ShadowOffset.Y * AllottedGeometry.Scale : 0.0f
-		);
-		const FVector2f DrawUnderlineOffset(
-			(ShadowOffset.X < 0.0f) ? -ShadowOffset.X * AllottedGeometry.Scale : 0.0f,
-			(ShadowOffset.Y < 0.0f) ? -ShadowOffset.Y * AllottedGeometry.Scale : 0.0f
-		);
-
-		// Draw the optional shadow
-		if (ShouldDropShadow)
-		{
-			FSlateDrawElement::MakeBox(
-				OutDrawElements,
-				++LayerId,
-				AllottedGeometry.ToPaintGeometry(TransformVector(InverseScale, Size), FSlateLayoutTransform(TransformPoint(InverseScale, Location + DrawShadowOffset))),
-				&UsedBrush,
-				bParentEnabled ? ESlateDrawEffect::None : ESlateDrawEffect::DisabledEffect,
-				TextArgs.DefaultStyle.ShadowColorAndOpacity * InWidgetStyle.GetColorAndOpacityTint()
-			);
-		}
+		const FLinearColor LineColorAndOpacity = Params.Brush->TintColor.GetColor(InWidgetStyle);
 
 		// Draw underline
 		FSlateDrawElement::MakeBox(
 			OutDrawElements,
 			++LayerId,
-			AllottedGeometry.ToPaintGeometry(TransformVector(InverseScale, Size), FSlateLayoutTransform(TransformPoint(InverseScale, Location + DrawUnderlineOffset))),
-			&UsedBrush,
-			bParentEnabled ? ESlateDrawEffect::None : ESlateDrawEffect::DisabledEffect,
-			LineColorAndOpacity * InWidgetStyle.GetColorAndOpacityTint()
+			AllottedGeometry.ToPaintGeometry(TransformVector(InverseScale, Size), FSlateLayoutTransform(TransformPoint(InverseScale, Location))),
+			Params.Brush,
+			ESlateDrawEffect::NoBlending,
+			LineColorAndOpacity
 		);
 	}
 
@@ -444,27 +372,61 @@ bool FSchemaSlateAdditionRenderer_Brush_MultiLine::Supports(const FSchemaSlateAd
 
 //////////////////////////////////////////////////////////////////////////
 
-FSchemaSlateRunExtension::FSchemaSlateRunExtension(const FInstancedStructContainer& InForwardAddition, const FInstancedStructContainer& InBackwardAddition, FSchemaDecoratorProxy InDecoratorProxy)
-	: ForwardAddition(InForwardAddition)
-	, BackwardAddition(InBackwardAddition)
-	, DecoratorProxy(InDecoratorProxy)
+FSlateAdditionRun::FSlateAdditionRun(const URichTextBlockSchemaDecoratorStyleSheet* InStyleSheet)
+	: StyleSheet(InStyleSheet)
+	, AdditionSet(0)
 {
+	int32 Index = 0;
 
-}
+	BackwardBeginIndex = StyleSheet->ForwardAddition.Num();
+	BackwardEndIndex = BackwardBeginIndex + StyleSheet->BackwardAddition.Num() - 1;
 
-int32 FSchemaSlateRunExtension::DrawForward(FSchemaSlateAdditionRendererParam& Params, const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled)
-{
-	if (!DecoratorProxy.IsValid())
+	BrushInstance.Empty(FMath::Min(BackwardEndIndex + 1, 32));
+
+	for (auto It = StyleSheet->ForwardAddition.begin(); It && Index < 32; ++It, ++Index)
 	{
-		return LayerId;
+		FConstStructView StructView = *It;
+		if (const FSchemaSlateAdditionRenderer* AdditionRenderer = StructView.GetPtr<const FSchemaSlateAdditionRenderer>())
+		{
+			if (AdditionRenderer->bDefaultEnable)
+			{
+				AdditionSet |= (1 << Index);
+				BrushInstance.Add(AdditionRenderer->DefaultBrush);
+			}
+		}
 	}
 
-	uint32 ForwardAdditionSet = DecoratorProxy.GetForwardAdditionSet();
-
-	uint32 Id = 1;
-	for (auto It = ForwardAddition.begin(); It; ++It)
+	for (auto It = StyleSheet->BackwardAddition.begin(); It && Index < 32; ++It, ++Index)
 	{
-		if (ForwardAdditionSet & Id)
+		FConstStructView StructView = *It;
+		if (const FSchemaSlateAdditionRenderer* AdditionRenderer = StructView.GetPtr<const FSchemaSlateAdditionRenderer>())
+		{
+			if (AdditionRenderer->bDefaultEnable)
+			{
+				AdditionSet |= (1 << Index);
+				BrushInstance.Add(AdditionRenderer->DefaultBrush);
+			}
+		}
+	}
+}
+
+int32 FSlateAdditionRun::DrawForward(FSchemaSlateAdditionRendererParam& Params, const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
+{
+	return OnPaint(StyleSheet->ForwardAddition, 0, Params, PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
+}
+
+int32 FSlateAdditionRun::DrawBackward(FSchemaSlateAdditionRendererParam& Params, const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
+{
+	return OnPaint(StyleSheet->BackwardAddition, BackwardBeginIndex, Params, PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
+}
+
+int32 FSlateAdditionRun::OnPaint(const FInstancedStructContainer& SlateAdditions, uint32 BeginIndex, FSchemaSlateAdditionRendererParam& Params, const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
+{
+	for (auto It = SlateAdditions.begin(); It; ++It)
+	{
+		if (BeginIndex >= 32) break;
+
+		if (AdditionSet & (1 << BeginIndex))
 		{
 			FConstStructView StructView = *It;
 			const FSchemaSlateAdditionRenderer* AdditionRenderer = StructView.GetPtr<const FSchemaSlateAdditionRenderer>();
@@ -479,143 +441,133 @@ int32 FSchemaSlateRunExtension::DrawForward(FSchemaSlateAdditionRendererParam& P
 				continue;
 			}
 
-			if (const UScriptStruct* PayloadStruct = AdditionRenderer->NeedPayload())
-			{
-				if (const FInstancedStruct* PayloadPtr = DecoratorProxy.GetBackwardPayloadMap().Find(Id))
-				{
-					if (PayloadPtr->GetScriptStruct() == PayloadStruct)
-					{
-						Params.Payload = PayloadPtr;
-					}
-				}
-				else
-				{
-					Params.Payload = nullptr;
-				}
-			}
-
-
+			Params.Brush = &BrushInstance[BeginIndex];
 			LayerId = AdditionRenderer->OnPaint(Params, PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
 		}
 
-		Id *= 2;
+		BeginIndex++;
 	}
 
 	return LayerId;
 }
 
-int32 FSchemaSlateRunExtension::DrawBackward(FSchemaSlateAdditionRendererParam& Params, const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled)
+void FSlateAdditionRun::SetEnable(ESlateAdditionRendererType Type, int32 Index, bool bIsEnable)
 {
-	if (!DecoratorProxy.IsValid())
+	switch (Type)
 	{
-		return LayerId;
-	}
-
-	uint32 BackwardAdditionSet = DecoratorProxy.GetBackwardAdditionSet();
-
-	uint32 Id = 1;
-	for (auto It = BackwardAddition.begin(); It; ++It)
-	{
-		if (BackwardAdditionSet & Id)
+	case ESlateAdditionRendererType::ForwardAddition: {
+		if (Index < BackwardBeginIndex)
 		{
-			FConstStructView StructView = *It;
-			const FSchemaSlateAdditionRenderer* AdditionRenderer = StructView.GetPtr<const FSchemaSlateAdditionRenderer>();
-
-			if (!AdditionRenderer)
+			if (bIsEnable)
 			{
-				continue;
+				AdditionSet |= 1 << Index;
 			}
-
-			if (!AdditionRenderer->Supports(Params))
+			else
 			{
-				continue;
+				AdditionSet &= 0 ^ (1 << Index);
 			}
-
-			if (const UScriptStruct* PayloadStruct = AdditionRenderer->NeedPayload())
-			{
-				if (const FInstancedStruct* PayloadPtr = DecoratorProxy.GetBackwardPayloadMap().Find(Id))
-				{
-					if (PayloadPtr->GetScriptStruct() == PayloadStruct)
-					{
-						Params.Payload = PayloadPtr;
-					}
-				}
-				else
-				{
-					Params.Payload = nullptr;
-				}
-			}
-
-
-			LayerId = AdditionRenderer->OnPaint(Params, PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
 		}
-
-		Id *= 2;
+		break;
 	}
-
-	return LayerId;
+	case ESlateAdditionRendererType::BackwardAddition: {
+		if (Index < BackwardEndIndex - BackwardBeginIndex)
+		{
+			Index = Index + BackwardBeginIndex;
+			if (bIsEnable)
+			{
+				AdditionSet |= 1 << Index;
+			}
+			else
+			{
+				AdditionSet &= 0 ^ (1 << Index);
+			}
+		}
+	}
+	}
 }
 
-FSchemaSlateWidgetRun::FSchemaSlateWidgetRun(TSharedPtr<FSchemaSlateRunExtension> InSlateRunExtension, const TSharedRef<class FTextLayout>& TextLayout, const FRunInfo& InRunInfo, const TSharedRef<const FString>& InText, const FSlateWidgetRun::FWidgetRunInfo& InWidgetInfo, const FTextRange& InRange)
+void FSlateAdditionRun::SetBrush(ESlateAdditionRendererType Type, int32 Index, FSlateBrush Brush)
+{
+	switch (Type)
+	{
+	case ESlateAdditionRendererType::ForwardAddition: {
+		if (Index < BackwardBeginIndex)
+		{
+			BrushInstance[Index] = Brush;
+		}
+		break;
+	}
+	case ESlateAdditionRendererType::BackwardAddition: {
+		if (Index < BackwardEndIndex - BackwardBeginIndex)
+		{
+			Index = Index + BackwardBeginIndex;
+			BrushInstance[Index] = Brush;
+		}
+	}
+	}
+}
+
+
+FSchemaSlateWidgetRun::FSchemaSlateWidgetRun(TSharedPtr<FSlateAdditionRun> InSlateAdditionRun, const TSharedRef<class FTextLayout>& TextLayout, const FRunInfo& InRunInfo, const TSharedRef<const FString>& InText, const FSlateWidgetRun::FWidgetRunInfo& InWidgetInfo, const FTextRange& InRange)
 	: FSlateWidgetRun(TextLayout, InRunInfo, InText, InWidgetInfo, InRange)
-	, SlateRunExtension(InSlateRunExtension)
+	, SlateAdditionRun(InSlateAdditionRun)
 {
 
 }
 
-TSharedRef<FSchemaSlateWidgetRun> FSchemaSlateWidgetRun::Create(TSharedPtr<FSchemaSlateRunExtension> InSlateRunExtension, const TSharedRef<class FTextLayout>& TextLayout, const FRunInfo& InRunInfo, const TSharedRef<const FString>& InText, const FSlateWidgetRun::FWidgetRunInfo& InWidgetInfo, const FTextRange& InRange)
+TSharedRef<FSchemaSlateWidgetRun> FSchemaSlateWidgetRun::Create(TSharedPtr<FSlateAdditionRun> InSlateAdditionRun, const TSharedRef<class FTextLayout>& TextLayout, const FRunInfo& InRunInfo, const TSharedRef<const FString>& InText, const FSlateWidgetRun::FWidgetRunInfo& InWidgetInfo, const FTextRange& InRange)
 {
-	return MakeShareable(new FSchemaSlateWidgetRun(InSlateRunExtension, TextLayout, InRunInfo, InText, InWidgetInfo, InRange));
+	return MakeShareable(new FSchemaSlateWidgetRun(InSlateAdditionRun, TextLayout, InRunInfo, InText, InWidgetInfo, InRange));
 }
 
 int32 FSchemaSlateWidgetRun::OnPaint(const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
 {
 
-	if (SlateRunExtension.IsValid())
+	if (SlateAdditionRun.IsValid())
 	{
 		FSchemaSlateAdditionRendererParam Param = PrepareParams(TextArgs, PRIVATE_GET(this, Text, SlateWidgetRun), GetTextRange());
-		LayerId = SlateRunExtension->DrawForward(Param, PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
+		LayerId = SlateAdditionRun->DrawForward(Param, PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
 	}
 	
 	LayerId = FSlateWidgetRun::OnPaint(PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
 
 
-	if (SlateRunExtension.IsValid())
+	if (SlateAdditionRun.IsValid())
 	{
 		FSchemaSlateAdditionRendererParam Param = PrepareParams(TextArgs, PRIVATE_GET(this, Text, SlateWidgetRun), GetTextRange());
-		LayerId = SlateRunExtension->DrawBackward(Param, PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
+		LayerId = SlateAdditionRun->DrawBackward(Param, PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
 	}
 
 	return LayerId;
 }
 
-FSchemaSlateTextRun::FSchemaSlateTextRun(TSharedPtr<FSchemaSlateRunExtension> InSlateRunExtension, const FRunInfo& InRunInfo, const TSharedRef<const FString>& InText, const FTextBlockStyle& InStyle, const FTextRange& InRange)
+FSchemaSlateTextRun::FSchemaSlateTextRun(TSharedPtr<FSlateAdditionRun> InSlateAdditionRun, const FRunInfo& InRunInfo, const TSharedRef<const FString>& InText, const FTextBlockStyle& InStyle, const FTextRange& InRange)
 	: FSlateTextRun(InRunInfo, InText, InStyle, InRange)
-	, SlateRunExtension(InSlateRunExtension)
+	, SlateAdditionRun(InSlateAdditionRun)
 {
 
 }
 
-TSharedRef<FSchemaSlateTextRun> FSchemaSlateTextRun::Create(TSharedPtr<FSchemaSlateRunExtension> InSlateRunExtension, const FRunInfo& InRunInfo, const TSharedRef<const FString>& InText, const FTextBlockStyle& Style, const FTextRange& InRange)
+TSharedRef<FSchemaSlateTextRun> FSchemaSlateTextRun::Create(TSharedPtr<FSlateAdditionRun> InSlateAdditionRun, const FRunInfo& InRunInfo, const TSharedRef<const FString>& InText, const FTextBlockStyle& Style, const FTextRange& InRange)
 {
-	return MakeShareable(new FSchemaSlateTextRun(InSlateRunExtension, InRunInfo, InText, Style, InRange));
+	return MakeShareable(new FSchemaSlateTextRun(InSlateAdditionRun, InRunInfo, InText, Style, InRange));
 }
 
 int32 FSchemaSlateTextRun::OnPaint(const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
 {
-	if (SlateRunExtension.IsValid())
+	if (SlateAdditionRun.IsValid())
 	{
 		FSchemaSlateAdditionRendererParam Param = PrepareParams(TextArgs, PRIVATE_GET(this, Text, SlateTextRun), GetTextRange());
-		LayerId = SlateRunExtension->DrawForward(Param, PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
+		LayerId = SlateAdditionRun->DrawForward(Param, PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
 	}
 
 	LayerId = FSlateTextRun::OnPaint(PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
 
 
-	if (SlateRunExtension.IsValid())
+	if (SlateAdditionRun.IsValid())
 	{
 		FSchemaSlateAdditionRendererParam Param = PrepareParams(TextArgs, PRIVATE_GET(this, Text, SlateTextRun), GetTextRange());
-		LayerId = SlateRunExtension->DrawBackward(Param, PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
+		LayerId = SlateAdditionRun->DrawBackward(Param, PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
 	}
 
 	return LayerId;

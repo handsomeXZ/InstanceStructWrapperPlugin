@@ -33,23 +33,10 @@ public:
 
 	// 暂时以int32为索引，后续考虑加入MapWrapper
 
-
-	// （Beta）动态开关仍处于开发阶段
 	UFUNCTION(BlueprintCallable, Category = "SchemaDecorator")
-	void SetEnableSlateForwardExtension(bool bIsEnable, int32 Index);
-	// （Beta）动态开关仍处于开发阶段
+	void SetSlateAdditionBrush(ESlateAdditionRendererType Type, int32 Index, FSlateBrush Brush);
 	UFUNCTION(BlueprintCallable, Category = "SchemaDecorator")
-	void SetEnableSlateBackwardExtension(bool bIsEnable, int32 Index);
-	// （Beta）动态开关和动态参数仍处于开发阶段
-	UFUNCTION(BlueprintCallable, Category = "SchemaDecorator")
-	void EnableSlateForwardExtensionWithPayload(int32 Index, FInstancedStruct Payload);
-	// （Beta）动态开关和动态参数仍处于开发阶段
-	UFUNCTION(BlueprintCallable, Category = "SchemaDecorator")
-	void EnableSlateBackwardExtensionWithPayload(int32 Index, FInstancedStruct Payload);
-	UFUNCTION(BlueprintPure, Category = "SchemaDecorator")
-	bool IsEnableSlateForwardExtension(int32 Index) const;
-	UFUNCTION(BlueprintPure, Category = "SchemaDecorator")
-	bool IsEnableSlateBackwardExtension(int32 Index) const;
+	void SetSlateAdditionStatus(ESlateAdditionRendererType Type, int32 Index, bool bIsEnable);
 	
 	virtual TSharedPtr<ITextDecorator> CreateDecorator(URichTextBlock* InOwner) override;
 public:
@@ -58,15 +45,7 @@ public:
 	UPROPERTY(EditAnywhere, Category = Schema, meta = (ExcludeBaseStruct, BaseStruct = "/Script/InstancedStructWrapper.SchemaDecoratorChooserBase"))
 	TObjectPtr<URichTextBlockSchemaDecoratorStyleSheet> StyleSheet;
 
-	// 默认支持32个附加渲染器
-	uint32 ForwardAdditionSet;
-	uint32 BackwardAdditionSet;
-
-	// 为ForwardAddition和BackwardAddition提供传参
-	UPROPERTY(Transient)
-	TMap<int32, FInstancedStruct> ForwardPayloadMap;
-	UPROPERTY(Transient)
-	TMap<int32, FInstancedStruct> BackwardPayloadMap;
+	TSharedPtr<FSlateAdditionRun> SlateAdditionRun;
 };
 
 // StyleSheet 提供用于组装Slate的数据
