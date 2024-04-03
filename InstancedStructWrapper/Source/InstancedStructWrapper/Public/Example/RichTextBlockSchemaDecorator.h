@@ -45,7 +45,7 @@ public:
 	UPROPERTY(EditAnywhere, Category = Schema, meta = (ExcludeBaseStruct, BaseStruct = "/Script/InstancedStructWrapper.SchemaDecoratorChooserBase"))
 	TObjectPtr<URichTextBlockSchemaDecoratorStyleSheet> StyleSheet;
 
-	TSharedPtr<FSlateAdditionRun> SlateAdditionRun;
+	TSharedPtr<FSlateAdditionBatchRun> SlateAdditionBatchRun;
 };
 
 // StyleSheet 提供用于组装Slate的数据
@@ -65,6 +65,8 @@ public:
 	UPROPERTY(EditAnywhere, Category = Appearance, meta = (RequiredAssetDataTags = "RowStructure=/Script/UMG.RichTextStyleRow"))
 	TObjectPtr<class UDataTable> TextStyle;
 
+	UPROPERTY(EditAnywhere, Category = Appearance, AdvancedDisplay)
+	TEnumAsByte<EVerticalAlignment> Alignment = VAlign_Center;
 	// 默认支持32个附加渲染器
 	UPROPERTY(EditAnywhere, Category = Appearance, AdvancedDisplay, meta = (ExcludeBaseStruct, BaseStruct = "/Script/InstancedStructWrapper.SchemaSlateAdditionRenderer"))
 	FInstancedStructContainerWrapper ForwardAddition;

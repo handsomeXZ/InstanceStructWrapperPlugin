@@ -12,7 +12,7 @@
 URichTextBlockSchemaDecorator::URichTextBlockSchemaDecorator(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 	, StyleSheet(nullptr)
-	, SlateAdditionRun(nullptr)
+	, SlateAdditionBatchRun(nullptr)
 {
 }
 
@@ -20,29 +20,29 @@ TSharedPtr<ITextDecorator> URichTextBlockSchemaDecorator::CreateDecorator(URichT
 {
 	if (IsValid(StyleSheet))
 	{
-		SlateAdditionRun = MakeShared<FSlateAdditionRun>(StyleSheet);
+		SlateAdditionBatchRun = MakeShared<FSlateAdditionBatchRun>(StyleSheet);
 	}
 	else
 	{
-		SlateAdditionRun = nullptr;
+		SlateAdditionBatchRun = nullptr;
 	}
 
-	return MakeShared<FRichSchemaDecorator>(InOwner, StyleSheet, SlateAdditionRun);
+	return MakeShared<FRichSchemaDecorator>(InOwner, StyleSheet, SlateAdditionBatchRun);
 }
 
 void URichTextBlockSchemaDecorator::SetSlateAdditionBrush(ESlateAdditionRendererType Type, int32 Index, FSlateBrush Brush)
 {
-	if (SlateAdditionRun.IsValid())
+	if (SlateAdditionBatchRun.IsValid())
 	{
-		SlateAdditionRun->SetBrush(Type, Index, Brush);
+		SlateAdditionBatchRun->SetBrush(Type, Index, Brush);
 	}
 }
 
 void URichTextBlockSchemaDecorator::SetSlateAdditionStatus(ESlateAdditionRendererType Type, int32 Index, bool bIsEnable)
 {
-	if (SlateAdditionRun.IsValid())
+	if (SlateAdditionBatchRun.IsValid())
 	{
-		SlateAdditionRun->SetEnable(Type, Index, bIsEnable);
+		SlateAdditionBatchRun->SetEnable(Type, Index, bIsEnable);
 	}
 }
 
