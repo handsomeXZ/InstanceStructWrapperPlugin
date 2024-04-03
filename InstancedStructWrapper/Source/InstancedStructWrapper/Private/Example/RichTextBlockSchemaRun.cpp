@@ -1,4 +1,4 @@
-﻿#include "Example/RichTextBlockSchemaRun.h"
+#include "Example/RichTextBlockSchemaRun.h"
 
 #include "Fonts/FontMeasure.h"
 #include "Styling/SlateStyle.h"
@@ -213,39 +213,98 @@ FName FRichSchemaDecorator::GetParseMetaData() const
 
 
 //////////////////////////////////////////////////////////////////////////
-FSchemaSlateAdditionRendererParam::FSchemaSlateAdditionRendererParam()
-	: Brush(nullptr)
+FSchemaSlateAdditionRendererParam::FSchemaSlateAdditionRendererParam(FSchemaSlateAdditionRendererDelta& InAdditionDelta)
+	: RendererType(ESlateAdditionRendererType::ForwardAddition)
+	, Brush(nullptr)
+	, AdditionDelta(InAdditionDelta)
 {
 
 }
 
-
-FSchemaSlateAdditionRendererParam PrepareParams(const FTextArgs& TextArgs, const TSharedRef<const FString>& ContentText, const FTextRange& TextRange)
+void FSchemaSlateAdditionRendererDelta::Rollback(const FTextArgs& TextArgs)
 {
-	FSchemaSlateAdditionRendererParam Params;
+	TextArgs.Block->SetLocationOffset(TextArgs.Block->GetLocationOffset() - TextArgsOffset);
+
+	if (TextArgs.bIsLastVisibleBlock)
+	{
+		CurLineIndex = -1;
+	}
+}
+
+void FSchemaSlateAdditionRendererDelta::Update(const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect)
+{
+	++CurBlockIndex;
+	bCurIsFirstBlock = false;
+	bCurIsLastBlock = false;
+
+	if (GetTypeHash(&(TextArgs.Line)) != LineViewID || FirstBlockID == GetTypeHash(&(TextArgs.Block.Get())))
+	{
+		// 重新进入每行第一块可视的Block
+		
+		++CurLineIndex;
+		CurBlockIndex = 0;
+
+		bCurIsFirstBlock = true;
+
+		LineViewID = GetTypeHash(&(TextArgs.Line));
+		FirstBlockID = GetTypeHash(&(TextArgs.Block.Get()));
+
+		UpdateVisibleBlock(TextArgs, AllottedGeometry, MyCullingRect);
+
+		TextArgsOffset = FVector2D(0.0);
+	}
+
+	if (TextArgs.Block == TextArgs.Line.Blocks[LastVisibleBlockIndex])
+	{
+		bCurIsLastBlock = true;
+	}
+
+	TextArgs.Block->SetLocationOffset(TextArgs.Block->GetLocationOffset() + TextArgsOffset);
+}
+
+void FSchemaSlateAdditionRendererDelta::UpdateVisibleBlock(const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect)
+{
+	// The block size and offset values are pre-scaled, so we need to account for that when converting the block offsets into paint geometry
+	const float InverseScale = Inverse(AllottedGeometry.Scale);
+
+	auto IsVisible = [&AllottedGeometry, &InverseScale, &MyCullingRect](FVector2D Offset, FVector2D Size)
+	{
+		// Is this line visible?  This checks if the culling rect, which represents the AABB around the last clipping rect, intersects the 
+		// line of text, this requires that we get the text line into render space.
+		// TODO perhaps save off this line view rect during text layout?
+		const FVector2D LocalLineOffset = Offset * InverseScale;
+		FSlateRect Rect(AllottedGeometry.GetRenderBoundingRect(FSlateRect(LocalLineOffset, LocalLineOffset + (Size * InverseScale))));
+
+		return FSlateRect::DoRectanglesIntersect(Rect, MyCullingRect);
+	};
+
+	FirstVisibleBlockIndex = -1;
+	LastVisibleBlockIndex = -1;
+	for (int32 LineIndex = 0; LineIndex < TextArgs.Line.Blocks.Num(); ++LineIndex)
+	{
+		const TSharedRef<ILayoutBlock>& Block = TextArgs.Line.Blocks[LineIndex];
+		if (IsVisible(Block->GetLocationOffset(), Block->GetSize()))
+		{
+			if (FirstVisibleBlockIndex == -1)
+			{
+				FirstVisibleBlockIndex = LineIndex;
+			}
+			LastVisibleBlockIndex = LineIndex;
+		}
+	}
+
+}
+
+FSchemaSlateAdditionRendererParam PrepareParams(const FTextArgs& TextArgs, const TSharedRef<const FString>& ContentText, const FTextRange& TextRange, FSchemaSlateAdditionRendererDelta& AdditionDelta)
+{
+	FSchemaSlateAdditionRendererParam Params(AdditionDelta);
 
 	for (int32 index = 0; index < TextArgs.Line.Blocks.Num(); ++index)
 	{
-		if (TextArgs.Line.Blocks[0] == TextArgs.Block)
+		if (TextArgs.Line.Blocks[index] == TextArgs.Block)
 		{
 			Params.BlockIndex = index;
 			Params.LineModelIndex = TextArgs.Line.ModelIndex;
-
-			int32 ModelLength = ContentText->Len();
-
-			// 仅单线程可以这样用
-			static int32 LineIndex = 0;
-			if (TextArgs.Block->GetTextRange().BeginIndex == 0 && TextArgs.Line.Range.BeginIndex == 0 && TextRange.BeginIndex == 0)
-			{
-				LineIndex = 0;
-			}
-
-			Params.LineIndex = LineIndex;
-
-			if (TextArgs.bIsLastVisibleBlock)
-			{
-				++LineIndex;
-			}
 
 			break;
 		}
@@ -256,19 +315,24 @@ FSchemaSlateAdditionRendererParam PrepareParams(const FTextArgs& TextArgs, const
 
 
 
-void GetExtensionMetrics(EHorizontalAlignment HAlign, EVerticalAlignment VAlign, FMargin Padding, FVector2f BrushSize, const FTextArgs& TextArgs, const float InFontScale, float& OutLineThickness, FVector2f& Offset, float& Width)
+void GetExtensionMetrics(EHorizontalAlignment HAlign, EVerticalAlignment VAlign, FMargin Padding, FVector2f BrushSize, const FTextArgs& TextArgs, const float InFontScale, float& OutLineThickness, FVector2D& Offset, float& Width, bool bFontImportant = false)
 {
 	TSharedRef<FSlateFontCache> FontCache = FSlateApplication::Get().GetRenderer()->GetFontCache();
 	FSlateFontInfo FontInfo;
 
-	float MaxHeight = FontCache->GetMaxCharacterHeight(TextArgs.DefaultStyle.Font, InFontScale);
-	//float Baseline = FontCache->GetBaseline(TextArgs.DefaultStyle.Font, InFontScale);
+	float MaxFontHeight = FontCache->GetMaxCharacterHeight(TextArgs.DefaultStyle.Font, InFontScale);
+	float BaseFontline = FontCache->GetBaseline(TextArgs.DefaultStyle.Font, InFontScale);
+
+	float MaxBlockHeight = TextArgs.Block->GetSize().Y;
+
+	float MaxLineHeight = TextArgs.Line.TextHeight;
+
 	FCharacterList& CharacterList = FontCache->GetCharacterList(FontInfo, InFontScale);
 
 	// 获取缩放比
 	float Scale = PRIVATE_GET(&CharacterList, FontKey).GetScale();
 
-	Offset = FVector2f(0);
+	Offset = FVector2D(0);
 
 	float Left = 0;
 	float Right = 0;
@@ -302,37 +366,91 @@ void GetExtensionMetrics(EHorizontalAlignment HAlign, EVerticalAlignment VAlign,
 	switch (VAlign)
 	{
 	case VAlign_Center: {
-		Top = (MaxHeight /*- Baseline*/) / 2.0 - BrushSize.Y / 2.0 * Scale;
-		Bottom = (MaxHeight /*- Baseline*/) / 2.0 + BrushSize.Y / 2.0 * Scale;
+		if (bFontImportant)
+		{
+			Top = (MaxFontHeight - BaseFontline) / 2.0 - BrushSize.Y / 2.0 * Scale;
+			Bottom = (MaxFontHeight - BaseFontline) / 2.0 + BrushSize.Y / 2.0 * Scale;
+			Top += MaxBlockHeight - MaxFontHeight;
+			Bottom += MaxBlockHeight - MaxFontHeight;
+		}
+		else
+		{
+			Top = MaxLineHeight / 2.0 - BrushSize.Y / 2.0 * Scale;
+			Bottom = MaxLineHeight / 2.0 + BrushSize.Y / 2.0 * Scale;
+		}
+
 		break;
 	}
-	default: {
-		// 目前不支持别的VAlign格式，因为我们只能取到字体的高度，暂时没法获得其他控件的高度。所以无法计算富文本每行的真实高度。
+	case VAlign_Bottom: {
+		if (bFontImportant)
+		{
+			Top = (MaxFontHeight - BaseFontline) - BrushSize.Y * Scale;
+			Bottom = MaxFontHeight - BaseFontline;
+			Top += MaxBlockHeight - MaxFontHeight;
+			Bottom += MaxBlockHeight - MaxFontHeight;
+		}
+		else
+		{
+			Top = MaxLineHeight - BrushSize.Y * Scale;
+			Bottom = MaxLineHeight;
+		}
+		break;
+	}
+	case VAlign_Top: {
+		if (bFontImportant)
+		{
+			Top = 0;
+			Bottom = BrushSize.Y * Scale;
+			Top += MaxBlockHeight - MaxFontHeight;
+			Bottom += MaxBlockHeight - MaxFontHeight;
+		}
+		else
+		{
+			Top = 0;
+			Bottom = BrushSize.Y * Scale;
+		}
+		break;
+	}
+	case VAlign_Fill: {
+		if (bFontImportant)
+		{
+			Top = 0;
+			Bottom = MaxFontHeight;
+			Top += MaxBlockHeight - MaxFontHeight;
+			Bottom += MaxBlockHeight - MaxFontHeight;
+		}
+		else
+		{
+			Top = 0;
+			Bottom = MaxLineHeight;
+		}
 	}
 	}
-
 
 	Left += Padding.Left;
 	Right -= Padding.Right;
 	Top += Padding.Top;
 	Bottom -= Padding.Bottom;
 
-	Offset.X = Left;
-	Offset.Y = Top;
 	Width = Right - Left;
 	OutLineThickness = Bottom - Top;
 
+	Offset.X = Left;
+	Offset.Y = Top;
+
+	Offset.X += TextArgs.Block->GetLocationOffset().X;
+	Offset.Y += TextArgs.Block->GetLocationOffset().Y - TextArgs.Line.Offset.Y - (MaxLineHeight - MaxBlockHeight);	// 实际的局部Offset = LocalOffset - LineOffset - (Line 高 - Block 高)
 }
 
-int32 FSchemaSlateAdditionRenderer_Brush_MultiLine::OnPaint(const FSchemaSlateAdditionRendererParam& Params, const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
+int32 FSchemaSlateAdditionRenderer_Brush_MultiLine::OnPaint(FSchemaSlateAdditionRendererParam& Params, const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
 {
 	TSharedRef<FSlateFontCache> FontCache = FSlateApplication::Get().GetRenderer()->GetFontCache();
 
 	float LineThickness;
-	FVector2f Offset;
+	FVector2D Offset = FVector2D(0);
 	float Width = TextArgs.Line.Size.X;
 
-	GetExtensionMetrics(HAlign, VAlign, Padding, Params.Brush->ImageSize, TextArgs, AllottedGeometry.Scale, LineThickness, Offset, Width);
+	GetExtensionMetrics(HAlign, VAlign, Padding, Params.Brush->ImageSize, TextArgs, AllottedGeometry.Scale, LineThickness, Offset, Width, bFontImportant);
 
 	const FVector2f Location(TextArgs.Line.Offset.X + Offset.X, TextArgs.Line.Offset.Y + Offset.Y);
 	const FVector2f Size(Width, FMath::Max<int16>(1, LineThickness));
@@ -340,9 +458,11 @@ int32 FSchemaSlateAdditionRenderer_Brush_MultiLine::OnPaint(const FSchemaSlateAd
 	// The block size and offset values are pre-scaled, so we need to account for that when converting the block offsets into paint geometry
 	const float InverseScale = Inverse(AllottedGeometry.Scale);
 
+	const ESlateDrawEffect DrawEffects = bParentEnabled ? ESlateDrawEffect::None : ESlateDrawEffect::DisabledEffect;
+
 	if (Size.X)
 	{
-		const FLinearColor LineColorAndOpacity = Params.Brush->TintColor.GetColor(InWidgetStyle);
+		const FLinearColor LineColorAndOpacity = Params.Brush->TintColor.GetSpecifiedColor();
 
 		// Draw underline
 		FSlateDrawElement::MakeBox(
@@ -350,7 +470,7 @@ int32 FSchemaSlateAdditionRenderer_Brush_MultiLine::OnPaint(const FSchemaSlateAd
 			++LayerId,
 			AllottedGeometry.ToPaintGeometry(TransformVector(InverseScale, Size), FSlateLayoutTransform(TransformPoint(InverseScale, Location))),
 			Params.Brush,
-			ESlateDrawEffect::NoBlending,
+			DrawEffects,
 			LineColorAndOpacity
 		);
 	}
@@ -360,8 +480,66 @@ int32 FSchemaSlateAdditionRenderer_Brush_MultiLine::OnPaint(const FSchemaSlateAd
 
 bool FSchemaSlateAdditionRenderer_Brush_MultiLine::Supports(const FSchemaSlateAdditionRendererParam& Params) const
 {
-	// 每行第一个Block执行渲染
-	if (Params.BlockIndex == 0)
+	// 前向渲染在每行第一个
+	// 延迟渲染在每行最后一个
+	if (Params.AdditionDelta.bCurIsFirstBlock && Params.RendererType == ESlateAdditionRendererType::ForwardAddition ||
+		Params.AdditionDelta.bCurIsLastBlock && Params.RendererType == ESlateAdditionRendererType::BackwardAddition)
+	{
+		return true;
+	}
+
+	return false;
+}
+
+int32 FSchemaSlateAdditionRenderer_HeadPlaceholder_MultiLine::OnPaint(FSchemaSlateAdditionRendererParam& Params, const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
+{
+	TSharedRef<FSlateFontCache> FontCache = FSlateApplication::Get().GetRenderer()->GetFontCache();
+
+	float LineThickness;
+	FVector2D Offset = FVector2D(0);
+	float Width = TextArgs.Line.Size.X;
+
+	GetExtensionMetrics(HAlign_Left, VAlign_Center, Padding, Params.Brush->ImageSize, TextArgs, AllottedGeometry.Scale, LineThickness, Offset, Width, bFontImportant);
+
+	const FVector2f Location(TextArgs.Line.Offset.X + Offset.X, TextArgs.Line.Offset.Y + Offset.Y);
+	const FVector2f Size(Width, FMath::Max<int16>(1, LineThickness));
+
+	// 强行让后续文本的头部被空出一段内容
+	TextArgs.Block->SetLocationOffset(TextArgs.Block->GetLocationOffset() + FVector2D(Width, 0));
+	Params.AdditionDelta.TextArgsOffset += FVector2D(Width, 0);
+
+	// The block size and offset values are pre-scaled, so we need to account for that when converting the block offsets into paint geometry
+	const float InverseScale = Inverse(AllottedGeometry.Scale);
+
+	const ESlateDrawEffect DrawEffects = bParentEnabled ? ESlateDrawEffect::None : ESlateDrawEffect::DisabledEffect;
+
+	if (Size.X)
+	{
+		const FLinearColor LineColorAndOpacity = Params.Brush->TintColor.GetSpecifiedColor();
+
+		// 有待研究，不自增1会导致Box即使在Text之后才绘制，也只能遮挡Text的外轮廓，而不会遮挡Text内容
+		++LayerId;
+
+		// Draw underline
+		FSlateDrawElement::MakeBox(
+			OutDrawElements,
+			++LayerId,
+			AllottedGeometry.ToPaintGeometry(TransformVector(InverseScale, Size), FSlateLayoutTransform(TransformPoint(InverseScale, Location))),
+			Params.Brush,
+			DrawEffects,
+			LineColorAndOpacity
+		);
+	}
+
+	return LayerId;
+}
+
+bool FSchemaSlateAdditionRenderer_HeadPlaceholder_MultiLine::Supports(const FSchemaSlateAdditionRendererParam& Params) const
+{
+	// 前向渲染在每行第一个
+	// 延迟渲染在每行最后一个
+	if (Params.AdditionDelta.bCurIsFirstBlock && Params.RendererType == ESlateAdditionRendererType::ForwardAddition ||
+		Params.AdditionDelta.bCurIsLastBlock && Params.RendererType == ESlateAdditionRendererType::BackwardAddition)
 	{
 		return true;
 	}
@@ -391,8 +569,12 @@ FSlateAdditionRun::FSlateAdditionRun(const URichTextBlockSchemaDecoratorStyleShe
 			if (AdditionRenderer->bDefaultEnable)
 			{
 				AdditionSet |= (1 << Index);
-				BrushInstance.Add(AdditionRenderer->DefaultBrush);
 			}
+			BrushInstance.Add(AdditionRenderer->DefaultBrush);
+		}
+		else
+		{
+			BrushInstance.Add(FSlateBrush());
 		}
 	}
 
@@ -404,19 +586,25 @@ FSlateAdditionRun::FSlateAdditionRun(const URichTextBlockSchemaDecoratorStyleShe
 			if (AdditionRenderer->bDefaultEnable)
 			{
 				AdditionSet |= (1 << Index);
-				BrushInstance.Add(AdditionRenderer->DefaultBrush);
 			}
+			BrushInstance.Add(AdditionRenderer->DefaultBrush);
+		}
+		else
+		{
+			BrushInstance.Add(FSlateBrush());
 		}
 	}
 }
 
 int32 FSlateAdditionRun::DrawForward(FSchemaSlateAdditionRendererParam& Params, const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
 {
+	Params.RendererType = ESlateAdditionRendererType::ForwardAddition;
 	return OnPaint(StyleSheet->ForwardAddition, 0, Params, PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
 }
 
 int32 FSlateAdditionRun::DrawBackward(FSchemaSlateAdditionRendererParam& Params, const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
 {
+	Params.RendererType = ESlateAdditionRendererType::BackwardAddition;
 	return OnPaint(StyleSheet->BackwardAddition, BackwardBeginIndex, Params, PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
 }
 
@@ -470,7 +658,7 @@ void FSlateAdditionRun::SetEnable(ESlateAdditionRendererType Type, int32 Index, 
 		break;
 	}
 	case ESlateAdditionRendererType::BackwardAddition: {
-		if (Index < BackwardEndIndex - BackwardBeginIndex)
+		if (Index <= BackwardEndIndex - BackwardBeginIndex)
 		{
 			Index = Index + BackwardBeginIndex;
 			if (bIsEnable)
@@ -498,7 +686,7 @@ void FSlateAdditionRun::SetBrush(ESlateAdditionRendererType Type, int32 Index, F
 		break;
 	}
 	case ESlateAdditionRendererType::BackwardAddition: {
-		if (Index < BackwardEndIndex - BackwardBeginIndex)
+		if (Index <= BackwardEndIndex - BackwardBeginIndex)
 		{
 			Index = Index + BackwardBeginIndex;
 			BrushInstance[Index] = Brush;
@@ -522,20 +710,22 @@ TSharedRef<FSchemaSlateWidgetRun> FSchemaSlateWidgetRun::Create(TSharedPtr<FSlat
 
 int32 FSchemaSlateWidgetRun::OnPaint(const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
 {
-
 	if (SlateAdditionRun.IsValid())
 	{
-		FSchemaSlateAdditionRendererParam Param = PrepareParams(TextArgs, PRIVATE_GET(this, Text, SlateWidgetRun), GetTextRange());
+		SlateAdditionRun->AdditionDelta.Update(TextArgs, AllottedGeometry, MyCullingRect);
+
+		FSchemaSlateAdditionRendererParam Param = PrepareParams(TextArgs, PRIVATE_GET(this, Text, SlateWidgetRun), GetTextRange(), SlateAdditionRun->AdditionDelta);
 		LayerId = SlateAdditionRun->DrawForward(Param, PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
 	}
 	
 	LayerId = FSlateWidgetRun::OnPaint(PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
 
-
 	if (SlateAdditionRun.IsValid())
 	{
-		FSchemaSlateAdditionRendererParam Param = PrepareParams(TextArgs, PRIVATE_GET(this, Text, SlateWidgetRun), GetTextRange());
+		FSchemaSlateAdditionRendererParam Param = PrepareParams(TextArgs, PRIVATE_GET(this, Text, SlateWidgetRun), GetTextRange(), SlateAdditionRun->AdditionDelta);
 		LayerId = SlateAdditionRun->DrawBackward(Param, PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
+
+		SlateAdditionRun->AdditionDelta.Rollback(TextArgs);
 	}
 
 	return LayerId;
@@ -557,17 +747,20 @@ int32 FSchemaSlateTextRun::OnPaint(const FPaintArgs& PaintArgs, const FTextArgs&
 {
 	if (SlateAdditionRun.IsValid())
 	{
-		FSchemaSlateAdditionRendererParam Param = PrepareParams(TextArgs, PRIVATE_GET(this, Text, SlateTextRun), GetTextRange());
+		SlateAdditionRun->AdditionDelta.Update(TextArgs, AllottedGeometry, MyCullingRect);
+
+		FSchemaSlateAdditionRendererParam Param = PrepareParams(TextArgs, PRIVATE_GET(this, Text, SlateTextRun), GetTextRange(), SlateAdditionRun->AdditionDelta);
 		LayerId = SlateAdditionRun->DrawForward(Param, PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
 	}
 
 	LayerId = FSlateTextRun::OnPaint(PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
 
-
 	if (SlateAdditionRun.IsValid())
 	{
-		FSchemaSlateAdditionRendererParam Param = PrepareParams(TextArgs, PRIVATE_GET(this, Text, SlateTextRun), GetTextRange());
+		FSchemaSlateAdditionRendererParam Param = PrepareParams(TextArgs, PRIVATE_GET(this, Text, SlateTextRun), GetTextRange(), SlateAdditionRun->AdditionDelta);
 		LayerId = SlateAdditionRun->DrawBackward(Param, PaintArgs, TextArgs, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
+
+		SlateAdditionRun->AdditionDelta.Rollback(TextArgs);
 	}
 
 	return LayerId;

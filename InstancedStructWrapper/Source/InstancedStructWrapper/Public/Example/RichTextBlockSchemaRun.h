@@ -36,15 +36,41 @@ private:
 
 
 //////////////////////////////////////////////////////////////////////////
+
+// 增量值，在SlateRun结束后回滚，一般可以交由ForwardAdditiong
+struct FSchemaSlateAdditionRendererDelta
+{
+	FSchemaSlateAdditionRendererDelta() {}
+	void Rollback(const FTextArgs& TextArgs);
+	void Update(const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect);
+	void UpdateVisibleBlock(const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect);
+	
+	int32 CurLineIndex = -1;			// 非准确Index，指可视的Index
+	int32 CurBlockIndex = 0;			// 非准确Index，指可视的Index
+
+	int32 FirstVisibleBlockIndex = 0;	// 准确Index，指可视的Index
+	int32 LastVisibleBlockIndex = 0;	// 准确Index，指可视的Index
+
+	bool bCurIsFirstBlock = false;
+	bool bCurIsLastBlock = false;
+
+	uint32 LineViewID = 0;
+	uint32 FirstBlockID = 0;	// 第一个可视Block
+	FVector2D TextArgsOffset;
+};
+
 struct FSchemaSlateAdditionRendererParam
 {
-	FSchemaSlateAdditionRendererParam();
+	FSchemaSlateAdditionRendererParam(FSchemaSlateAdditionRendererDelta& AdditionDelta);
 
-	int32 LineModelIndex = 0;	// 未被手动换行的整串文本
-	int32 LineIndex = 0;
-	int32 BlockIndex = 0;
+	ESlateAdditionRendererType RendererType;
+
+	int32 LineModelIndex = -1;	// 未被手动换行的整串文本
+	int32 BlockIndex = -1;		// 准确Index
 
 	const FSlateBrush* Brush;
+	// 增量值，在SlateRun结束后回滚，一般可以交由ForwardAddition修改
+	FSchemaSlateAdditionRendererDelta& AdditionDelta;
 };
 
 UENUM()
@@ -59,7 +85,7 @@ struct INSTANCEDSTRUCTWRAPPER_API FSchemaSlateAdditionRenderer
 {
 	GENERATED_BODY()
 	virtual ~FSchemaSlateAdditionRenderer() {}
-	virtual int32 OnPaint(const FSchemaSlateAdditionRendererParam& Params, const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const { return LayerId; }
+	virtual int32 OnPaint(FSchemaSlateAdditionRendererParam& Params, const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const { return LayerId; }
 	virtual bool Supports(const FSchemaSlateAdditionRendererParam& Params) const { return false; }
 	virtual const UScriptStruct* NeedPayload() const { return nullptr; }
 
@@ -68,20 +94,33 @@ struct INSTANCEDSTRUCTWRAPPER_API FSchemaSlateAdditionRenderer
 	// 默认启用渲染器
 	UPROPERTY(EditAnywhere)
 	bool bDefaultEnable = false;
+	// 在计算渲染位置时，会更依赖文字内容的位置（目前仅影响垂直位置）
+	UPROPERTY(EditAnywhere)
+	bool bFontImportant = false;
 };
 USTRUCT(DisplayName="Brush MultiLine Renderer")
 struct INSTANCEDSTRUCTWRAPPER_API FSchemaSlateAdditionRenderer_Brush_MultiLine : public FSchemaSlateAdditionRenderer
 {
 	GENERATED_BODY()
 	virtual ~FSchemaSlateAdditionRenderer_Brush_MultiLine() {}
-	virtual int32 OnPaint(const FSchemaSlateAdditionRendererParam& Params, const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const;
+	virtual int32 OnPaint(FSchemaSlateAdditionRendererParam& Params, const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const;
 	virtual bool Supports(const FSchemaSlateAdditionRendererParam& Params) const;
 
 	UPROPERTY(EditAnywhere)
 	TEnumAsByte<EHorizontalAlignment> HAlign = HAlign_Center;
-	// 目前不支持别的VAlign格式，因为我们只能取到字体的高度，暂时没法获得其他控件的高度。所以无法计算富文本每行的真实高度。
-	UPROPERTY(VisibleAnywhere)
+	UPROPERTY(EditAnywhere)
 	TEnumAsByte<EVerticalAlignment> VAlign = VAlign_Center;
+	UPROPERTY(EditAnywhere)
+	FMargin Padding;
+};
+USTRUCT(DisplayName="Head Placeholder MultiLine Renderer")
+struct INSTANCEDSTRUCTWRAPPER_API FSchemaSlateAdditionRenderer_HeadPlaceholder_MultiLine : public FSchemaSlateAdditionRenderer
+{
+	GENERATED_BODY()
+	virtual ~FSchemaSlateAdditionRenderer_HeadPlaceholder_MultiLine() {}
+	virtual int32 OnPaint(FSchemaSlateAdditionRendererParam& Params, const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const;
+	virtual bool Supports(const FSchemaSlateAdditionRendererParam& Params) const;
+
 	UPROPERTY(EditAnywhere)
 	FMargin Padding;
 };
@@ -101,13 +140,19 @@ protected:
 	virtual int32 OnPaint(const FInstancedStructContainer& SlateAdditions, uint32 BeginIndex, FSchemaSlateAdditionRendererParam& Params, const FPaintArgs& PaintArgs, const FTextArgs& TextArgs, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const;
 	const URichTextBlockSchemaDecoratorStyleSheet* StyleSheet;
 
+	friend class FSchemaSlateWidgetRun;
+	friend class FSchemaSlateTextRun;
+
 	// 默认支持32个附加渲染器
+	// 或许用一个BitArray更合适？
 	uint32 AdditionSet;
 
 	int32 BackwardBeginIndex;
 	int32 BackwardEndIndex;
 
 	TArray<FSlateBrush> BrushInstance;
+
+	mutable FSchemaSlateAdditionRendererDelta AdditionDelta;
 };
 
 
