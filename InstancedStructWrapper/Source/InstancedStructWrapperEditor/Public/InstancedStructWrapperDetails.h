@@ -104,13 +104,14 @@ public:
 
 struct FInstancedStructWrapperContainerViewModel : public TSharedFromThis<FInstancedStructWrapperContainerViewModel>
 {
-	FInstancedStructWrapperContainerViewModel() : PropertyHandle(nullptr) {}
+	FInstancedStructWrapperContainerViewModel() : PropertyHandle(nullptr), PropertyOuter(nullptr) {}
 	FInstancedStructWrapperContainerViewModel(TSharedRef<IPropertyHandle> InPropertyHandle);
 
 	struct FInstancedStructContainerWrapper* GetContainer();
 	TSharedPtr<IPropertyHandle> GetPropertyHandle() { return PropertyHandle; }
 	FInstancedStructContainerArray& GetContainerProxy() { return ContainerProxy; }
 
+	void OnContainerValueChanged(UObject*, FPropertyChangedEvent& ChangedEvent);
 	void OnContainerProxyValueChanged();
 	void UpdateChildMetaData();
 
@@ -118,15 +119,15 @@ struct FInstancedStructWrapperContainerViewModel : public TSharedFromThis<FInsta
 protected:
 	FInstancedStructContainerArray ContainerProxy;
 	
-
 	TSharedPtr<IPropertyHandle> PropertyHandle;
+	UObject* PropertyOuter;
 };
 
 class FInstancedStructWrapperContainerDetails : public IPropertyTypeCustomization
 {
 public:
 	FInstancedStructWrapperContainerDetails();
-	virtual ~FInstancedStructWrapperContainerDetails() {}
+	virtual ~FInstancedStructWrapperContainerDetails();
 
 	virtual void CustomizeHeader(TSharedRef<IPropertyHandle> StructPropertyHandle, class FDetailWidgetRow& HeaderRow, IPropertyTypeCustomizationUtils& StructCustomizationUtils) override;
 	virtual void CustomizeChildren(TSharedRef<IPropertyHandle> StructPropertyHandle, class IDetailChildrenBuilder& StructBuilder, IPropertyTypeCustomizationUtils& StructCustomizationUtils) override;
@@ -144,4 +145,6 @@ protected:
 
 	// 通过元数据来定义自定义行为，重定义的行为由SchemaClass提供
 	UClass* SchemaClass = nullptr;
+
+	FDelegateHandle OnObjectPropertyChangedHandle;
 };

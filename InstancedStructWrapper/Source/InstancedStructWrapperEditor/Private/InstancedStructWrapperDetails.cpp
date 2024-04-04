@@ -6,6 +6,7 @@
 #include "Widgets/Text/SInlineEditableTextBlock.h"
 #include "DetailLayoutBuilder.h"
 #include "Styling/SlateStyleRegistry.h"
+#include "ScopedTransaction.h"
 
 #include "IStructureDataProvider.h"
 #include "PropertyNode.h"
@@ -442,6 +443,9 @@ void FInstancedStructWrapperDetails::OnTextCommitted(const FText& NewLabel, ETex
 	{
 		return;
 	}
+
+	FScopedTransaction Transaction(LOCTEXT("InstancedStructWrapper", "OnTextCommitted"));
+
 	StructProperty->NotifyPreChange();
 
 	StructProperty->EnumerateRawData([&NewLabel](void* RawData, const int32 /*DataIndex*/, const int32 /*NumDatas*/)
@@ -528,8 +532,14 @@ FInstancedStructWrapperDataDetails::FInstancedStructWrapperDataDetails(TSharedPt
 // FInstancedStructWrapperContainerViewModel
 FInstancedStructWrapperContainerViewModel::FInstancedStructWrapperContainerViewModel(TSharedRef<IPropertyHandle> InPropertyHandle)
 	: PropertyHandle(InPropertyHandle)
+	, PropertyOuter(nullptr)
 {
+	TArray<UObject*> OuterObjects;
+	PropertyHandle->GetOuterObjects(OuterObjects);
+	PropertyOuter = OuterObjects[0];
+
 	const FInstancedStructContainerWrapper* Container = GetContainer();
+	GetContainerProxy().Data.Empty(Container->Num());
 
 	for (int32 Index = 0; Index < Container->Num(); ++Index)
 	{
@@ -547,24 +557,106 @@ FInstancedStructContainerWrapper* FInstancedStructWrapperContainerViewModel::Get
 	return Wrapper;
 }
 
-
 void FInstancedStructWrapperContainerViewModel::OnContainerProxyValueChanged()
 {
-	FInstancedStructContainerWrapper* Container = GetContainer();
-	Container->Empty();
-	Container->DisplayNameOverride.Empty();
+	FScopedTransaction Transaction(TEXT("InstancedStructWrapperContainer"), LOCTEXT("InstancedStructWrapperContainer", "OnPropertyValueChanged"), PropertyOuter);
 
-	TArray<FInstancedStruct> StructDatas;
-	for (auto& Wrapper : GetContainerProxy().Data)
+	PropertyHandle->NotifyPreChange();
+
 	{
-		StructDatas.Add((FInstancedStruct)Wrapper);
-		Container->DisplayNameOverride.Add(Wrapper.DisplayNameOverride);
+		FInstancedStructContainerWrapper* Container = GetContainer();
+		Container->Empty();
+		Container->DisplayNameOverride.Empty();
+
+		TArray<FInstancedStruct> StructDatas;
+		for (auto& Wrapper : GetContainerProxy().Data)
+		{
+			StructDatas.Add((FInstancedStruct)Wrapper);
+			Container->DisplayNameOverride.Add(Wrapper.DisplayNameOverride);
+		}
+		Container->Append(StructDatas);
+
+		UpdateChildMetaData();
+
+		OnContainerChanged.Broadcast();
 	}
-	Container->Append(StructDatas);
 
-	UpdateChildMetaData();
+	PropertyHandle->NotifyPostChange(EPropertyChangeType::ValueSet);
+	PropertyHandle->NotifyFinishedChangingProperties();
 
-	OnContainerChanged.Broadcast();
+	// 理论上，仅在添加/删除和修改类型时，才会执行OnContainerProxyValueChanged进行重构。
+	// 如果都进行重新创建，开销太大了，不过因为只是编辑器行为，先不管了。
+	// 下面是写了一半的处理逻辑，还需要针对Map，Set等进行特殊处理，太麻烦了。
+
+	//UObject* OuterObject = ChangedEvent.MemberProperty->GetOwnerUObject();
+	//
+	//// ArrayIndicesPerObject的最后一个元素必然是Object的属性名
+	//// ArrayIndicesPerObject的第一个元素必然是被改变的属性名。
+	//
+	//FProperty* PrevChildProperty = OuterObject->GetClass()->FindPropertyByName(FName(ChangedEvent.ArrayIndicesPerObject.rbegin()->Value));
+	//check(PrevChildProperty);
+	//void* PrevChildRawData = PrevChildProperty->ContainerPtrToValuePtr<void>(OuterObject);
+	//
+	//
+	//for (auto It = ChangedEvent.ArrayIndicesPerObject.rbegin() + 1; It; ++It)
+	//{
+	//	if (FStructProperty* StructProperty = CastFieldChecked<FStructProperty>(PrevChildProperty))
+	//	{
+	//		if (It != ChangedEvent.ArrayIndicesPerObject.rend())
+	//		{
+	//			// 此时It还未遍历到最后一个元素，也就是被改变的属性
+	//			FProperty* PrevChildProperty = StructProperty->Struct->FindPropertyByName(FName(It->Value));
+	//			check(PrevChildProperty);
+	//			PrevChildRawData = PrevChildProperty->ContainerPtrToValuePtr<void>(PrevChildRawData);
+	//		}
+	//		else
+	//		{
+	//			if (StructProperty->Struct->IsChildOf(FInstancedStructContainerWrapper::StaticStruct()))
+	//			{
+	//				// 被改变的属性的父结构体是FInstancedStructContainerWrapper，则这需要对Wrapper进行重构。
+	//				OnPropertyValueChanged();
+	//			}
+	//			else
+	//			{
+	//				// 否则，只是修改属性就行。
+	//
+	//
+	//			}
+	//		}
+	//	}
+	//	else if (FArrayProperty* ArrayProperty = CastFieldChecked<FArrayProperty>(PrevChildProperty))
+	//	{
+	//		// 对于数组，同理
+	//		if (It != ChangedEvent.ArrayIndicesPerObject.rend())
+	//		{
+	//			PrevChildProperty = ArrayProperty->Inner;
+	//			PrevChildRawData = ArrayProperty->ContainerPtrToValuePtr<void>(PrevChildRawData, It->Key);
+	//		}
+	//		else
+	//		{
+	//
+	//		}
+	//	}
+	//
+	//}
+}
+
+void FInstancedStructWrapperContainerViewModel::OnContainerValueChanged(UObject* Outer, FPropertyChangedEvent& ChangedEvent)
+{	
+	if (Outer && Outer == PropertyOuter && ChangedEvent.ChangeType == EPropertyChangeType::Unspecified)
+	{
+		// 此时应当为Undo，不应该再进行属性通知了
+		const FInstancedStructContainerWrapper* Container = GetContainer();
+		GetContainerProxy().Data.Empty(Container->Num());
+
+		for (int32 Index = 0; Index < Container->Num(); ++Index)
+		{
+			GetContainerProxy().Data.Emplace((*Container)[Index]);
+			GetContainerProxy().Data.Last().DisplayNameOverride = Container->DisplayNameOverride.IsEmpty() ? FText() : Container->DisplayNameOverride[Index];
+		}
+
+		OnContainerChanged.Broadcast();
+	}
 }
 
 void FInstancedStructWrapperContainerViewModel::UpdateChildMetaData()
@@ -599,12 +691,18 @@ TSharedRef<IPropertyTypeCustomization> FInstancedStructWrapperContainerDetails::
 
 FInstancedStructWrapperContainerDetails::FInstancedStructWrapperContainerDetails()
 {
+}
 
+FInstancedStructWrapperContainerDetails::~FInstancedStructWrapperContainerDetails()
+{
+	FCoreUObjectDelegates::OnObjectPropertyChanged.Remove(OnObjectPropertyChangedHandle);
 }
 
 void FInstancedStructWrapperContainerDetails::CustomizeHeader(TSharedRef<IPropertyHandle> StructPropertyHandle, class FDetailWidgetRow& HeaderRow, IPropertyTypeCustomizationUtils& StructCustomizationUtils)
 {
 	ContainerViewModel = MakeShared<FInstancedStructWrapperContainerViewModel>(StructPropertyHandle);
+	
+	OnObjectPropertyChangedHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddThreadSafeSP(ContainerViewModel.ToSharedRef(), &FInstancedStructWrapperContainerViewModel::OnContainerValueChanged);
 
 	InitSchemaClass();
 }
