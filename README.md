@@ -39,7 +39,7 @@
 * * *
 
 ## 支持FInstancedStructWrapper的Widget和Extension自定义
-* Slate扩展：“支持覆盖原有的Button内容”、“支持在顶部及右侧添加扩展内容”
+* 提供了简便的Slate扩展接口：“支持覆盖原有的Button内容”、“支持在顶部及右侧添加扩展内容”。
 * **FInstancedStructContainer**也适用
 * ![示例4.3](image/Image_4_3.png)
 * ![示例4.4](image/Image_4_4.png)
