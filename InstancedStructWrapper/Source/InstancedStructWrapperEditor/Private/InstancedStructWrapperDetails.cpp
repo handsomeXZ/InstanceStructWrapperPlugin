@@ -586,59 +586,6 @@ void FInstancedStructWrapperContainerViewModel::OnContainerProxyValueChanged()
 
 	// 理论上，仅在添加/删除和修改类型时，才会执行OnContainerProxyValueChanged进行重构。
 	// 如果都进行重新创建，开销太大了，不过因为只是编辑器行为，先不管了。
-	// 下面是写了一半的处理逻辑，还需要针对Map，Set等进行特殊处理，太麻烦了。
-
-	//UObject* OuterObject = ChangedEvent.MemberProperty->GetOwnerUObject();
-	//
-	//// ArrayIndicesPerObject的最后一个元素必然是Object的属性名
-	//// ArrayIndicesPerObject的第一个元素必然是被改变的属性名。
-	//
-	//FProperty* PrevChildProperty = OuterObject->GetClass()->FindPropertyByName(FName(ChangedEvent.ArrayIndicesPerObject.rbegin()->Value));
-	//check(PrevChildProperty);
-	//void* PrevChildRawData = PrevChildProperty->ContainerPtrToValuePtr<void>(OuterObject);
-	//
-	//
-	//for (auto It = ChangedEvent.ArrayIndicesPerObject.rbegin() + 1; It; ++It)
-	//{
-	//	if (FStructProperty* StructProperty = CastFieldChecked<FStructProperty>(PrevChildProperty))
-	//	{
-	//		if (It != ChangedEvent.ArrayIndicesPerObject.rend())
-	//		{
-	//			// 此时It还未遍历到最后一个元素，也就是被改变的属性
-	//			FProperty* PrevChildProperty = StructProperty->Struct->FindPropertyByName(FName(It->Value));
-	//			check(PrevChildProperty);
-	//			PrevChildRawData = PrevChildProperty->ContainerPtrToValuePtr<void>(PrevChildRawData);
-	//		}
-	//		else
-	//		{
-	//			if (StructProperty->Struct->IsChildOf(FInstancedStructContainerWrapper::StaticStruct()))
-	//			{
-	//				// 被改变的属性的父结构体是FInstancedStructContainerWrapper，则这需要对Wrapper进行重构。
-	//				OnPropertyValueChanged();
-	//			}
-	//			else
-	//			{
-	//				// 否则，只是修改属性就行。
-	//
-	//
-	//			}
-	//		}
-	//	}
-	//	else if (FArrayProperty* ArrayProperty = CastFieldChecked<FArrayProperty>(PrevChildProperty))
-	//	{
-	//		// 对于数组，同理
-	//		if (It != ChangedEvent.ArrayIndicesPerObject.rend())
-	//		{
-	//			PrevChildProperty = ArrayProperty->Inner;
-	//			PrevChildRawData = ArrayProperty->ContainerPtrToValuePtr<void>(PrevChildRawData, It->Key);
-	//		}
-	//		else
-	//		{
-	//
-	//		}
-	//	}
-	//
-	//}
 }
 
 void FInstancedStructWrapperContainerViewModel::OnContainerValueChanged(UObject* Outer, FPropertyChangedEvent& ChangedEvent)

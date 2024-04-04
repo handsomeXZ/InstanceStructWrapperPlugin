@@ -50,4 +50,6 @@
 	* 支持**动态和静态开关**，支持**动态参数**。
 * ![示例6](Image_6.png)
 * ![示例7](Image_7.png)
-
+* * *
+## 待优化
+* 目前InstancedStructContainer的编辑器支持方案不是很合理，在数据变化时，都会重新构建InstancedStructContainer，存在不必要的开销。
