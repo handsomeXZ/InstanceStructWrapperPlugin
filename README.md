@@ -1,3 +1,14 @@
+##目录
+- [功能](#功能)
+  - [支持重命名](#支持重命名)
+  - [支持内容颜色的自定义](#支持内容颜色的自定义)
+  - [提供FInstancedStructContainer的编辑器支持](#提供FInstancedStructContainer的编辑器支持)
+  - [支持FInstancedStructWrapper的Widget和Extension自定义](#支持FInstancedStructWrapper的Widget和Extension自定义)
+- [项目示例](#项目示例)
+  - [自定义样式组合规则的富文本Decorator](#自定义样式组合规则的富文本Decorator)
+- [开发方向](#开发方向)
+
+# 功能
 ## 支持重命名
 
 * ![示例1](image/Image_1.png)
@@ -22,23 +33,21 @@
 
 * * *
 
-## 支持FInstancedStructWrapper的Widget和Extension自定义
-* Slate扩展：“支持覆盖原有的Button内容”、“支持在顶部及右侧添加扩展内容”
-* ![示例4.3](image/Image_4_3.png)
-
-* ![示例4.4](image/Image_4_4.png)
-
-* ![示例4.5](image/Image_4_5.png)
-
-* * *
-
 ## 提供FInstancedStructContainer的编辑器支持
-
 * ![示例5](image/Image_5.png)
 
 * * *
 
-## （使用示例）提供自定义规则的富文本Decorator
+## 支持FInstancedStructWrapper的Widget和Extension自定义
+* Slate扩展：“支持覆盖原有的Button内容”、“支持在顶部及右侧添加扩展内容”
+* **FInstancedStructContainer**也适用
+* ![示例4.3](image/Image_4_3.png)
+* ![示例4.4](image/Image_4_4.png)
+* ![示例4.5](image/Image_4_5.png)
+
+* * *
+# 项目示例
+## 提供自定义样式组合规则的富文本Decorator
 
 * 可以**任意叠加控件**
 * 可以定制自己的数据结构
@@ -51,5 +60,6 @@
 * ![示例6](image/Image_6.png)
 * ![示例7](image/Image_7.png)
 * * *
+#开发方向
 ## 待优化
 * 目前InstancedStructContainer的编辑器支持方案不是很合理，在数据变化时，都会重新构建InstancedStructContainer，存在不必要的开销。
