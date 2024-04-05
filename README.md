@@ -63,3 +63,4 @@
 # 开发方向
 ## 待优化
 * 目前InstancedStructContainer的编辑器支持方案不是很合理，在数据变化时，都会重新构建InstancedStructContainer，存在不必要的开销。
+* （项目示例）修复文本内容偏移后，剪裁位置没有跟随改变的问题。
