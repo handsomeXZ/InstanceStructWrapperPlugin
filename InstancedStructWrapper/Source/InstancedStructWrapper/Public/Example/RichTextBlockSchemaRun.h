@@ -48,13 +48,14 @@ struct FSchemaSlateAdditionRendererBatchDelta
 	int32 CurLineIndex = -1;			// 非准确Index，仅递增，指可视的Index
 	int32 CurBlockIndex = -1;			// 非准确Index，仅递增，指可视的Index
 
-	int32 FirstVisibleBlockIndex = -1;	// 准确Index，指可视的Index
-	int32 LastVisibleBlockIndex = -1;	// 准确Index，指可视的Index
+	int32 FirstVisibleBlockIndex = -1;	// 准确Index，指可视的Index，每行
+	int32 LastVisibleBlockIndex = -1;	// 准确Index，指可视的Index，每行
 
 	bool bCurIsFirstBlock = false;
 	bool bCurIsLastBlock = false;
 
 	int32 RealLayerId = 0;
+	int32 BackwardMaxLayerId = 0;		// 仅在Backward执行前后才会更新
 public:
 	// Delta...
 	FVector2D TextArgsOffset_Line;
@@ -123,7 +124,16 @@ struct INSTANCEDSTRUCTWRAPPER_API FSchemaSlateAdditionRenderer_HeadPlaceholder_M
 	virtual bool Supports(const FSchemaSlateAdditionRendererParam& Params) const;
 
 	UPROPERTY(EditAnywhere)
+	bool bNeedPlacehold = false;
+	UPROPERTY(EditAnywhere)
 	FMargin Padding;
+};
+USTRUCT(DisplayName="Head Placeholder FirstLine Renderer")
+struct INSTANCEDSTRUCTWRAPPER_API FSchemaSlateAdditionRenderer_HeadPlaceholder_FirstLine : public FSchemaSlateAdditionRenderer_HeadPlaceholder_MultiLine
+{
+	GENERATED_BODY()
+	virtual ~FSchemaSlateAdditionRenderer_HeadPlaceholder_FirstLine() {}
+	virtual bool Supports(const FSchemaSlateAdditionRendererParam& Params) const;
 };
 //////////////////////////////////////////////////////////////////////////
 
