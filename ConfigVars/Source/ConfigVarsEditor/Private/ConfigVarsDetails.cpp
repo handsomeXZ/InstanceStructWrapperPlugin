@@ -6,11 +6,6 @@
 #include "IStructureDataProvider.h"
 #include "IDetailChildrenBuilder.h"
 
-//////////////////////////////////////////////////////////////////////////
-#include "LinkerPlaceholderExportObjectExternal.h"
-typedef ULinkerPlaceholderExportObjectExternal UConfigVarsLazyDataBag;
-//////////////////////////////////////////////////////////////////////////
-
 #define LOCTEXT_NAMESPACE "ConfigVarsDetails"
 
 class FConfigVarsDataProvider : public IStructureDataProvider
@@ -142,7 +137,7 @@ void FConfigVarsDetails::CustomizeHeader(TSharedRef<IPropertyHandle> StructPrope
 	FConfigVarsBag* Bag = nullptr;
 
 
-	// 非事务，不允许撤回
+	// 路脟脢脗脦帽拢卢虏禄脭脢脨铆鲁路禄脴
 	StructPropertyHandle->EnumerateRawData([&Bag, &OuterObjects, ViewModel = ViewModel, ConfigVarsDataClass](void* RawData, const int32 /*DataIndex*/, const int32 /*NumDatas*/)
 	{
 		Bag = static_cast<FConfigVarsBag*>(RawData);
