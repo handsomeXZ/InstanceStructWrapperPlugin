@@ -6,6 +6,11 @@
   - [支持FInstancedStructWrapper的Widget和Extension自定义](#支持FInstancedStructWrapper的Widget和Extension自定义)
 - [项目示例](#项目示例)
   - [自定义样式组合规则的富文本Decorator](#自定义样式组合规则的富文本Decorator)
+- [数据懒加载框架](#数据懒加载框架)
+  - [介绍](#介绍)
+  - [配置方式](#配置方式)
+  - [静态数据类型配置](#静态数据类型配置)
+  - [适用场景](#适用场景)
 - [开发方向](#开发方向)
 
 # 功能
