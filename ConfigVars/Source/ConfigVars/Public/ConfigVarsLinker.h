@@ -1,0 +1,165 @@
+#pragma once
+
+#include "CoreMinimal.h"
+
+#include "BitArray.h"
+
+#include "ConfigVarsLinker.generated.h"
+
+typedef TMap<int32, UObject*> FImportObjectMap;
+
+class FArchiveConfigVars : public FArchive
+{
+public:
+	FArchiveConfigVars(FArchive& Ar, UConfigVarsLinker* Linker, bool bIsLoading, bool bIsSaving);
+
+	using FArchive::operator<<; // For visibility of the overloads we don't override
+
+	template<typename ValueType>
+	FArchive& operator<<(ValueType& Value) { return RealArchive << Value; }
+
+	//~ Begin FArchive Interface
+	virtual FArchive& operator<<(UObject*& Obj) override;
+	//~ End FArchive Interface
+
+private:
+	FArchive& RealArchive;
+	UConfigVarsLinker* ConfigVarsLinker;
+};
+
+struct FConfigVarsImport
+{
+	FConfigVarsImport() {}
+	FConfigVarsImport(UObject* InObject)
+		: ObjectPath(InObject)
+	{}
+	FConfigVarsImport(FSoftObjectPath& InObjectPath)
+		: ObjectPath(InObjectPath)
+	{}
+
+	FSoftObjectPath	ObjectPath;
+
+	friend FArchive& operator<<(FArchive& Ar, FConfigVarsImport& Import);
+};
+
+struct FConfigVarsExport
+{
+	FConfigVarsExport()
+		: ObjectName(NAME_None)
+		, SerialLocation(0)
+		, ClassIndex(INDEX_NONE)
+		, ImportSet(0)
+	{}
+	/**
+	 * The name of the UObject represented by this resource.
+	 * Serialized
+	 */
+	FName			ObjectName;
+
+	/**
+	 * The location offset from Export Serialize Head.
+	 * Depending on the loading method, the starting position is actually inaccurate and needs to be corrected.
+	 * Serialized
+	 */
+	int64         	SerialLocation;
+
+	/**
+	 * Location of the resource for this export's class (if non-zero).
+	 */
+	int32  			ClassIndex;
+
+
+	FBitArray		ImportSet;
+
+	friend FArchive& operator<<(FArchive& Ar, FConfigVarsExport& Export);
+};
+
+
+UCLASS()
+class UConfigVarsLinker : public UObject
+{
+	GENERATED_BODY()
+public:
+	virtual void Serialize(FStructuredArchive::FRecord Record) override final;
+
+	// 序列化为Import（这里记录的ImportObject，仅会在对应的ExportObject加载前才会被加载）
+	int32 ImportObject(class UObject* ImportObj);
+
+	UConfigVarsData* FindData(int32 ExportIndex);
+
+#if WITH_EDITOR
+	UConfigVarsData* LoadData(int32& InOutExportIndex, const UClass* TemplateDataClass);
+	void RemoveData(int32 ExportIndex);
+#endif
+
+private:
+	friend class FArchiveConfigVars;
+
+	// 序列化为Export（暂时不提供给外部）
+	void ExportObject(FStructuredArchive::FRecord Record, class UConfigVarsData* ExportObj);
+	// 确保所有Export都被加载
+	void VerifyAllExportLoaded();
+
+	void LoadImports_Sync(TArray<int32> ExportIDs);
+	void LoadExports_Sync(TArray<int32> ExportIDs, TArray<UConfigVarsData*>& ExportObjs);
+
+	// 反序列化Export
+	void SerializeExport(FStructuredArchive::FRecord Record, int32 ExportIndex, float SerializeHeadOffset);
+
+
+	TArray<FConfigVarsImport> ImportTable;
+	TArray<FConfigVarsExport> ExportTable;
+
+	UPROPERTY(Transient)
+	TArray<class UConfigVarsData*> ExportObjects;
+
+	// 用于存储待反序列化的Export队列。（考虑使用无锁队列来支持异步加载）
+	TArray<int32> PendingLoadExports;
+
+#if WITH_EDITOR
+	FLinkerLoad* CreateLinker_Sync();
+#endif
+
+};
+
+template<>
+struct TStructOpsTypeTraits<UConfigVarsLinker> : public TStructOpsTypeTraitsBase2<UConfigVarsLinker>
+{
+	enum
+	{
+		WithSerializer = true,
+	};
+};
+
+/************************************************************************/
+/* ConfigVarsData，让FInstancedStruct类型的ConfigVars支持懒加载和缓存优化。	*/
+/* 为了支持使用PlaceholderObject，必须继承自UObject。							*/
+/* 遵守：内部数据都为静态数据，不能修改	。										*/
+/************************************************************************/
+UCLASS(Abstract)
+class CONFIGVARS_API UConfigVarsData : public UObject
+{
+	GENERATED_BODY()
+	public:
+	UFUNCTION(BlueprintCallable, Category = ConfigVarsData)
+	static const UConfigVarsData* K2_GetData(UObject* DataOuter, FConfigVarsBag ConfigVarsBag);
+
+	virtual void Serialize(FArchive& Ar) override final {}
+	virtual void Serialize(FStructuredArchive::FRecord Record) override final {}
+
+	virtual void SerializeConfigVars(FArchiveConfigVars& ConfigVarsAr, FArchive& RealAr);
+
+private:
+	// @TODO: 仿照FLinkerLoad::ConstructExportsReaders()进行优化，现在在改动数据结构以后，Serialize会报错（因为是完全流式的）。
+	template<typename SrcType>
+	void Serialize_Internal(FArchiveConfigVars& ConfigVarsAr, FArchive& RealAr, const UStruct* DataStruct, SrcType* SrcData);
+};
+
+template<>
+struct TStructOpsTypeTraits<UConfigVarsData> : public TStructOpsTypeTraitsBase2<UConfigVarsData>
+{
+	enum
+	{
+		WithSerializer = true,
+	};
+};
