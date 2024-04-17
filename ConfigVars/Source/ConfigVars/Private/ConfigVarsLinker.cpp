@@ -121,91 +121,163 @@ void UConfigVarsLinker::Serialize(FStructuredArchive::FRecord Record)
 			VerifyAllExportLoaded();
 		}
 
+		SerializeHeadData(Record);
+		SerializeExportData(Record);
+		SerializeTableData(Record);
+
+	}
+	else if (Ar.IsLoading())
+	{
+		if (PendingLoadExports_Async.IsEmpty())
+		{
+			SerializeHeadData(Record);
+			SerializeExportData(Record);
+			SerializeTableData(Record);
+		}
+		else
+		{
+			ProcessPendingLoadExports(Record);
+		}
+	}
+}
+
+void UConfigVarsLinker::SerializeHeadData(FStructuredArchive::FRecord Record)
+{
+	FArchive& Ar = Record.GetUnderlyingArchive();
+
+	if (Ar.IsSaving())
+	{
 		ImportTable.Empty();
 		ExportTable.Empty();
-	
+
 		int32 ExportObjectsNum = ExportObjects.Num();
 		Ar << ExportObjectsNum;
 
 		int32 InitialLocation = Ar.Tell();
 		Ar << InitialLocation;
-
-		{
-			FSerialSizeScope Scope(Ar);	// SerialSize
-
-			for (UConfigVarsData* ExportObj : ExportObjects)
-			{
-				//if (IsValid(ExportObj))
-				{
-					ExportObject(Record, ExportObj);
-				}
-			}
-		}
-
-		{
-			FSerialSizeScope Scope(Ar);	// ImportExportSize
-			Ar << ImportTable;
-			Ar << ExportTable;
-		}
-
 	}
 	else if (Ar.IsLoading())
 	{
 		int32 ExportObjectsNum = 0;
 		Ar << ExportObjectsNum;
 
-		if (PendingLoadExports.IsEmpty())
+		// 常规反序列化流程
+		ExportObjects.SetNum(ExportObjectsNum);
+
+		int32 InitialLocation = 0;
+		Ar << InitialLocation;
+	}
+}
+
+void UConfigVarsLinker::SerializeExportData(FStructuredArchive::FRecord Record)
+{
+	FArchive& Ar = Record.GetUnderlyingArchive();
+
+	if (Ar.IsSaving())
+	{
+		FSerialSizeScope Scope(Ar);	// ExportDataSize
+
+		for (UConfigVarsData* ExportObj : ExportObjects)
 		{
-			// 常规反序列化流程
-			ExportObjects.SetNum(ExportObjectsNum);
-
-			int32 InitialLocation = 0;
-			Ar << InitialLocation;
-
-			int32 SerialSize = 0;
-			Ar << SerialSize;
-
-			// 跳过这部分数据的反序列化
-			//FArchiveFileReaderGeneric& FileReader = static_cast<FArchiveFileReaderGeneric&>(Ar.GetLoader());
-			Ar.Seek(Ar.Tell() + SerialSize);
-
-			Ar << SerialSize;
-
-			Ar << ImportTable;
-			Ar << ExportTable;
-		}
-		else
-		{
-			// Export 序列化流程
-			int32 RealLocation = Ar.Tell();
-
-			int32 InitialLocation = 0;
-			Ar << InitialLocation;
-
-			int32 SerializeHeadOffset = InitialLocation - RealLocation;
-
-			int32 SerialSize = 0;
-			int32 ImportExportSize = 0;
-
-			Ar << SerialSize;
-
-			int32 InitialOffset = Ar.Tell();
-
-			for (int32 Index : PendingLoadExports)
+			if (IsValid(ExportObj))
 			{
-				if (!ExportObjects[Index])
-				{
-					SerializeExport(Record, Index, SerializeHeadOffset);
-				}
+				ExportObject(Record, ExportObj);
 			}
-			PendingLoadExports.Empty();
-
-			Ar.Seek(InitialOffset + SerialSize);
-
-			Ar << ImportExportSize;
-			Ar.Seek(Ar.Tell() + ImportExportSize);
 		}
 	}
+	else if (Ar.IsLoading())
+	{
+		int32 ExportDataSize = 0;
+		Ar << ExportDataSize;
+
+		// 跳过这部分数据的反序列化
+		//FArchiveFileReaderGeneric& FileReader = static_cast<FArchiveFileReaderGeneric&>(Ar.GetLoader());
+		Ar.Seek(Ar.Tell() + ExportDataSize);
+	}
+}
+
+void UConfigVarsLinker::SerializeTableData(FStructuredArchive::FRecord Record)
+{
+	FArchive& Ar = Record.GetUnderlyingArchive();
+
+	if (Ar.IsSaving())
+	{
+		FSerialSizeScope Scope(Ar);	// TableDataSize
+		Ar << ImportTable;
+		Ar << ExportTable;
+	}
+	else if (Ar.IsLoading())
+	{
+		int32 TableDataSize = 0;
+		Ar << TableDataSize;
+
+		Ar << ImportTable;
+		Ar << ExportTable;
+	}
+}
+
+void UConfigVarsLinker::ProcessPendingLoadExports(FStructuredArchive::FRecord Record)
+{
+	FArchive& Ar = Record.GetUnderlyingArchive();
+
+	int32 ExportObjectsNum = ExportObjects.Num();
+	Ar << ExportObjectsNum;
+
+	// 计算序列化地址偏移
+	int32 RealLoaderLocation = Ar.Tell();
+	int32 RecordLoaderLocation = 0;
+	Ar << RecordLoaderLocation;
+	int32 SerializeHeadOffset = RecordLoaderLocation - RealLoaderLocation;
+
+	int32 ExportDataSize = 0;
+	int32 TableDataSize = 0;
+
+	Ar << ExportDataSize;
+	int32 InitialOffset = Ar.Tell();
+
+	//////////////////////////////////////////////////////////////////////////
+	// 反序列化核心逻辑
+
+	TArray<void*> PendingIndexs;
+	PendingLoadExports_Async.PopAll(PendingIndexs);
+	for (void* Index_C : PendingIndexs)
+	{
+#pragma warning(disable: 4311)
+		// 传入时即为int32，所以可以直接无视warning
+		int32 ExportIndex = reinterpret_cast<int64>(Index_C) - 1;
+#pragma warning(default: 4311)
+		FConfigVarsExport& Export = ExportTable[ExportIndex];
+		FConfigVarsImport& Import = ImportTable[Export.ClassIndex];
+
+		if (UObject* ExistingObject = FindObjectFast<UObject>(this, Export.ObjectName))
+		{
+			continue;
+		}
+
+		UClass* ExportClass = ((FSoftClassPath&)(Import.ObjectPath)).ResolveClass();
+		if (ExportClass)
+		{
+			UConfigVarsData* NewObj = NewObject<UConfigVarsData>(this, ExportClass, Export.ObjectName);
+
+			// 反序列化Object的数据
+			Ar.Seek(Export.SerialLocation - SerializeHeadOffset);
+
+			FArchiveConfigVars ConfigVarsAr(Ar, this, true, false);
+
+			NewObj->SerializeConfigVars(ConfigVarsAr, Ar);
+		}
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+
+	// 跳过ExportData的序列化
+	Ar.Seek(InitialOffset + ExportDataSize);
+
+	// 跳过TableData的序列化
+	Ar << TableDataSize;
+	Ar.Seek(Ar.Tell() + TableDataSize);
+
+
 }
 
 int32 UConfigVarsLinker::ImportObject(class UObject* ImportObj)
@@ -273,14 +345,51 @@ void UConfigVarsLinker::VerifyAllExportLoaded()
 	}
 }
 
-void UConfigVarsLinker::LoadImports_Sync(TArray<int32> ExportIDs)
+void UConfigVarsLinker::LoadImports_Sync(TArray<int32> ExportIndexs)
+{
+	FlushAsyncLoading(LoadImports_Async(ExportIndexs, FLoadConfigVarsAsyncDelegate()));
+}
+
+TArray<int32> UConfigVarsLinker::LoadImports_Async(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack)
 {
 	// 暂时不支持UObjectRedirector
 
 	TArray<int32> AsyncLoadRequestIDs;
 	TArray<int32> PendingLoadImport;
 
-	auto AsyncLoadImport = [&AsyncLoadRequestIDs, &PendingLoadImport, this](FConfigVarsImport& Import) {
+	FLoadPackageAsyncDelegate LoadPackageAsyncDelegate;
+	FGuid CounterID;
+
+	if (CallBack.IsBound())
+	{
+		CounterID = FGuid::NewGuid();
+		LoadPackageAsyncDelegate = FLoadPackageAsyncDelegate::CreateWeakLambda(this, [this, ExportIndexs, CounterID, CallBack](const FName&, UPackage*, EAsyncLoadingResult::Type Result)
+		{
+			// GameThread
+
+			if (Result != EAsyncLoadingResult::Succeeded)
+			{
+				// 有依赖加载失败了
+				LoadingImportCounter.Remove(CounterID);
+				TArray<UConfigVarsData*> NullObjs;
+				CallBack.ExecuteIfBound(NullObjs);
+				return;
+			}
+
+			if (!LoadingImportCounter.Contains(CounterID))
+			{
+				// 因为某些原因计数器被移除，所以这里不需要再进行下去了。
+				return;
+			}
+
+			if (LoadingImportCounter[CounterID]-- == 1)
+			{
+				LoadExports_Async_Internal(ExportIndexs, CallBack);
+			}
+		});
+	}
+
+	auto AsyncLoadImport = [&AsyncLoadRequestIDs, &PendingLoadImport, &LoadPackageAsyncDelegate, this](FConfigVarsImport& Import) {
 		if (UPackage* ExistingPackage = FindObjectFast<UPackage>(/*Outer =*/nullptr, Import.ObjectPath.GetLongPackageFName()))
 		{
 			if (Import.ObjectPath.IsAsset())
@@ -301,11 +410,11 @@ void UConfigVarsLinker::LoadImports_Sync(TArray<int32> ExportIDs)
 
 		constexpr int32 PIEInstanceID = INDEX_NONE;
 		constexpr int32 Priority = INT32_MAX;
-		AsyncLoadRequestIDs.Add(LoadPackageAsync(Import.ObjectPath.GetAssetPath().GetPackageName().ToString(), FLoadPackageAsyncDelegate(), Priority, PKG_None, PIEInstanceID));
+		AsyncLoadRequestIDs.Add(LoadPackageAsync(Import.ObjectPath.GetAssetPath().GetPackageName().ToString(), LoadPackageAsyncDelegate, Priority, PKG_None, PIEInstanceID));
 	};
 
 
-	for (int32 ExportIndex : ExportIDs)
+	for (int32 ExportIndex : ExportIndexs)
 	{
 		FConfigVarsExport& Export = ExportTable[ExportIndex];
 		// Class
@@ -322,10 +431,12 @@ void UConfigVarsLinker::LoadImports_Sync(TArray<int32> ExportIDs)
 		}
 	}
 
-	if (!AsyncLoadRequestIDs.IsEmpty())
+	if (CallBack.IsBound())
 	{
-		FlushAsyncLoading(AsyncLoadRequestIDs);
+		LoadingImportCounter.Add(CounterID, AsyncLoadRequestIDs.Num());
 	}
+
+	return AsyncLoadRequestIDs;
 }
 
 void UConfigVarsLinker::LoadExports_Sync(TArray<int32> ExportIndexs, TArray<UConfigVarsData*>& ExportObjs)
@@ -335,56 +446,97 @@ void UConfigVarsLinker::LoadExports_Sync(TArray<int32> ExportIndexs, TArray<UCon
 		return;
 	}
 
-	PendingLoadExports = ExportIndexs;
-	ExportObjs.Empty(ExportIndexs.Num());
-
-	UPackage* Package = GetPackage();
-	this->ClearFlags(RF_NeedLoad | RF_WasLoaded | RF_LoadCompleted);
-	this->SetFlags(RF_Public | RF_NeedPostLoad | RF_NeedPostLoadSubobjects | RF_WillBeLoaded);
-	
-	int32 AsyncLoadRequestID = -1;
-
-	constexpr int32 PIEInstanceID = INDEX_NONE;
-	constexpr int32 Priority = INT32_MAX;
-	AsyncLoadRequestID = LoadPackageAsync(Package->GetLoadedPath(), Package->GetFName(), FLoadPackageAsyncDelegate(), PKG_None, PIEInstanceID, Priority, nullptr, LOAD_NoVerify);
-	
-	FlushAsyncLoading(AsyncLoadRequestID);
+	LoadExports_Async(ExportIndexs, FLoadConfigVarsAsyncDelegate());
 
 	for (int32 Index : ExportIndexs)
 	{
-		ExportObjs.Add(ExportObjects[Index]);
+		UConfigVarsData* ExistingObject = FindObjectFast<UConfigVarsData>(this, ExportTable[Index].ObjectName);
+		ExportObjs.Add(ExistingObject);
 	}
-
-	this->ClearFlags(RF_NeedLoad | RF_NeedPostLoad | RF_NeedPostLoadSubobjects | RF_WillBeLoaded);
-	this->SetFlags(RF_Public | RF_WasLoaded | RF_LoadCompleted);
 }
 
-void UConfigVarsLinker::SerializeExport(FStructuredArchive::FRecord Record, int32 ExportIndex, float SerializeHeadOffset)
+void UConfigVarsLinker::LoadExports_Async(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack)
 {
-	FArchive& Ar = Record.GetUnderlyingArchive();
-
-	if (!Ar.IsLoading())
+	if (ExportIndexs.IsEmpty())
 	{
+		TArray<UConfigVarsData*> NullObjs;
+		CallBack.ExecuteIfBound(NullObjs);
 		return;
 	}
 
-	FConfigVarsExport& Export = ExportTable[ExportIndex];
-	FConfigVarsImport& Import = ImportTable[Export.ClassIndex];
-
-	UClass* ExportClass = ((FSoftClassPath&)(Import.ObjectPath)).ResolveClass();
-	if (ExportClass)
+	for (int32 Index : ExportIndexs)
 	{
-		ExportObjects[ExportIndex] = NewObject<UConfigVarsData>(this, ExportClass, Export.ObjectName);
-
-		{
-			// 反序列化Object的数据
-			Ar.Seek(Export.SerialLocation - SerializeHeadOffset);
-
-			FArchiveConfigVars ConfigVarsAr(Ar, this, true, false);
-
-			ExportObjects[ExportIndex]->SerializeConfigVars(ConfigVarsAr, Ar);
-		}
+		// 不需要每次都new一个对象，直接将Index转指针就行。但必须 +1，因为 0 == NULL
+#pragma warning(disable: 4312)
+		PendingLoadExports_Async.Push(reinterpret_cast<void*>(Index + 1));
+#pragma warning(default: 4312)
 	}
+
+	if (CallBack.IsBound())
+	{
+		FGuid UniqueGuid = FGuid::NewGuid();
+
+		LoadImports_Async(ExportIndexs, CallBack);
+	}
+	else
+	{
+		constexpr int32 PIEInstanceID = INDEX_NONE;
+		constexpr int32 Priority = INT32_MAX;
+
+		UPackage* Package = GetPackage();
+
+		this->ClearFlags(RF_NeedLoad | RF_WasLoaded | RF_LoadCompleted);
+		this->SetFlags(RF_Public | RF_NeedPostLoad | RF_NeedPostLoadSubobjects | RF_WillBeLoaded);
+		
+		int32 AsyncLoadRequestID = LoadPackageAsync(Package->GetLoadedPath(), Package->GetFName(), FLoadPackageAsyncDelegate(), PKG_None, PIEInstanceID, Priority, nullptr, LOAD_NoVerify);
+		
+		if (AsyncLoadRequestID != INDEX_NONE)
+		{
+			FlushAsyncLoading(AsyncLoadRequestID);
+		}
+
+		this->ClearFlags(RF_NeedLoad | RF_NeedPostLoad | RF_NeedPostLoadSubobjects | RF_WillBeLoaded);
+		this->SetFlags(RF_Public | RF_WasLoaded | RF_LoadCompleted);
+	}
+
+}
+
+void UConfigVarsLinker::LoadExports_Async_Internal(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack)
+{
+	UPackage* Package = GetPackage();
+	this->ClearFlags(RF_NeedLoad | RF_WasLoaded | RF_LoadCompleted);
+	this->SetFlags(RF_Public | RF_NeedPostLoad | RF_NeedPostLoadSubobjects | RF_WillBeLoaded);
+
+	constexpr int32 PIEInstanceID = INDEX_NONE;
+	constexpr int32 Priority = INT32_MAX;
+
+	LoadPackageAsync(Package->GetLoadedPath(), Package->GetFName(), FLoadPackageAsyncDelegate::CreateWeakLambda(this, [this, ExportIndexs, CallBack](const FName&, UPackage*, EAsyncLoadingResult::Type Result) {
+		TArray<UConfigVarsData*> ExportObjs;
+
+		this->ClearFlags(RF_NeedLoad | RF_NeedPostLoad | RF_NeedPostLoadSubobjects | RF_WillBeLoaded);
+		this->SetFlags(RF_Public | RF_WasLoaded | RF_LoadCompleted);
+
+		if (Result != EAsyncLoadingResult::Succeeded)
+		{
+			// 加载失败
+			CallBack.ExecuteIfBound(ExportObjs);
+			return;
+		}
+
+		ExportObjs.Empty(ExportIndexs.Num());
+
+		UPackage* Package = GetPackage();
+		constexpr int32 PIEInstanceID = INDEX_NONE;
+		constexpr int32 Priority = INT32_MAX;
+
+		for (int32 Index : ExportIndexs)
+		{
+			UConfigVarsData* ExistingObject = FindObjectFast<UConfigVarsData>(this, ExportTable[Index].ObjectName);
+			ExportObjs.Add(ExistingObject);
+		}
+		CallBack.ExecuteIfBound(ExportObjs);
+
+	}), PKG_None, PIEInstanceID, Priority, nullptr, LOAD_NoVerify);
 }
 
 UConfigVarsData* UConfigVarsLinker::FindData(int32 ExportIndex)

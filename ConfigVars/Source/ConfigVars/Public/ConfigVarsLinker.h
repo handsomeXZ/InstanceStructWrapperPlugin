@@ -8,6 +8,8 @@
 
 typedef TMap<int32, UObject*> FImportObjectMap;
 
+DECLARE_DELEGATE_OneParam(FLoadConfigVarsAsyncDelegate, TArray<UConfigVarsData*>);
+
 class FArchiveConfigVars : public FArchive
 {
 public:
@@ -95,26 +97,41 @@ public:
 private:
 	friend class FArchiveConfigVars;
 
+	// 是否跳过反序列化
+	void SerializeHeadData(FStructuredArchive::FRecord Record);
+	void SerializeExportData(FStructuredArchive::FRecord Record);
+	void SerializeTableData(FStructuredArchive::FRecord Record);
+
 	// 序列化为Export（暂时不提供给外部）
 	void ExportObject(FStructuredArchive::FRecord Record, class UConfigVarsData* ExportObj);
+
+	// 真正反序列化Export数据
+	void ProcessPendingLoadExports(FStructuredArchive::FRecord Record);
+	
+	void LoadImports_Sync(TArray<int32> ExportIndexs);
+	void LoadExports_Sync(TArray<int32> ExportIndexs, TArray<UConfigVarsData*>& ExportObjs);
+
+	// @TODO：这里接口的设计有点怪
+	TArray<int32> LoadImports_Async(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack);
+	void LoadExports_Async(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack);
+	void LoadExports_Async_Internal(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack);
+
 	// 确保所有Export都被加载
 	void VerifyAllExportLoaded();
 
-	void LoadImports_Sync(TArray<int32> ExportIDs);
-	void LoadExports_Sync(TArray<int32> ExportIDs, TArray<UConfigVarsData*>& ExportObjs);
-
-	// 反序列化Export
-	void SerializeExport(FStructuredArchive::FRecord Record, int32 ExportIndex, float SerializeHeadOffset);
-
-
+	// Runtime时，不能再手动修改ImportTable和ExportTable，否则存在线程风险
 	TArray<FConfigVarsImport> ImportTable;
 	TArray<FConfigVarsExport> ExportTable;
 
 	UPROPERTY(Transient)
 	TArray<class UConfigVarsData*> ExportObjects;
 
-	// 用于存储待反序列化的Export队列。（考虑使用无锁队列来支持异步加载）
-	TArray<int32> PendingLoadExports;
+	// -----------------------------------------------------------------------------------
+	// 用于存储待反序列化的Export队列。
+	TLockFreePointerListFIFO<void, PLATFORM_CACHE_LINE_SIZE> PendingLoadExports_Async;
+	// Import 依赖加载的计数器
+	TMap<FGuid, int32> LoadingImportCounter;
+	// -----------------------------------------------------------------------------------
 
 #if WITH_EDITOR
 	FLinkerLoad* CreateLinker_Sync();
