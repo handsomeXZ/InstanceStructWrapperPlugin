@@ -14,6 +14,8 @@
 
 class UConfigVarsData;
 
+DECLARE_DYNAMIC_DELEGATE_OneParam(FOnConfigVarsAsyncCallBack, const TArray<UConfigVarsData*>&, OutObjects);
+
 USTRUCT(BlueprintType)
 struct CONFIGVARS_API FConfigVarsBag
 {
@@ -21,12 +23,13 @@ struct CONFIGVARS_API FConfigVarsBag
 public:
 	virtual ~FConfigVarsBag();
 
-	const UConfigVarsData* GetData(UObject* Outer);
+	const UConfigVarsData* LoadData(UObject* Outer);
+	void LoadData_Async(UObject* Outer, FOnConfigVarsAsyncCallBack CallBack);
 
 	template<typename T>
-	const T* GetData(UObject* Outer)
+	const T* LoadData(UObject* Outer)
 	{
-		return Cast<T>(GetData(Outer));
+		return Cast<T>(LoadData(Outer));
 	}
 
 	bool Serialize(FArchive& Ar);
@@ -40,7 +43,7 @@ public:
 #endif
 
 #if WITH_EDITOR
-	UConfigVarsData* LoadData(UObject* Outer, const UClass* DataClass);
+	UConfigVarsData* LoadOrAddData(UObject* Outer, const UClass* DataClass);
 #endif
 };
 
@@ -51,6 +54,18 @@ struct TStructOpsTypeTraits<FConfigVarsBag> : public TStructOpsTypeTraitsBase2<F
 	{
 		WithSerializer = true,
 	};
+};
+
+UCLASS()
+class UConfigVarsBagReader : public UObject
+{
+	GENERATED_BODY()
+public:
+	UFUNCTION(BlueprintCallable, Category = ConfigVarsData)
+	static const UConfigVarsData* LoadData(UObject* Outer, FConfigVarsBag ConfigVarsBag);
+
+	UFUNCTION(BlueprintCallable, Category = ConfigVarsData)
+	static void LoadData_Async(UObject* Outer, FConfigVarsBag ConfigVarsBag, FOnConfigVarsAsyncCallBack CallBack);
 };
 
 /************************************************************************/
@@ -86,4 +101,3 @@ private:
 	//https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Runtime/Core/Containers/TLruCache?application_version=5.0
 	TLruCache<uint32, UConfigVarsData*> Cache;
 };
-

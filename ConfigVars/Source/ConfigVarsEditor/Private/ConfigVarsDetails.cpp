@@ -127,7 +127,7 @@ void FConfigVarsDetails::CustomizeHeader(TSharedRef<IPropertyHandle> StructPrope
 	TArray<UObject*> OuterObjects;
 	StructPropertyHandle->GetOuterObjects(OuterObjects);
 
-	if (OuterObjects.Num() != 1)
+	if (OuterObjects.Num() != 1 || OuterObjects[0]->HasAnyFlags(RF_ClassDefaultObject))
 	{
 		return;
 	}
@@ -137,14 +137,14 @@ void FConfigVarsDetails::CustomizeHeader(TSharedRef<IPropertyHandle> StructPrope
 	FConfigVarsBag* Bag = nullptr;
 
 
-	// ·ÇÊÂÎñ£¬²»ÔÊÐí³·»Ø
+	// 非事务，不允许撤回
 	StructPropertyHandle->EnumerateRawData([&Bag, &OuterObjects, ViewModel = ViewModel, ConfigVarsDataClass](void* RawData, const int32 /*DataIndex*/, const int32 /*NumDatas*/)
 	{
 		Bag = static_cast<FConfigVarsBag*>(RawData);
 		if (Bag)
 		{
 			Bag->Outermost = OuterObjects[0];
-			ViewModel->ConfigVarsDataCache = Bag->LoadData(OuterObjects[0], ConfigVarsDataClass);
+			ViewModel->ConfigVarsDataCache = Bag->LoadOrAddData(OuterObjects[0], ConfigVarsDataClass);
 		}
 		return true;
 	});

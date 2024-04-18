@@ -9,6 +9,16 @@
 
 static int32 LRUCacheMaxNum = 128;
 
+const UConfigVarsData* UConfigVarsBagReader::LoadData(UObject* Outer, FConfigVarsBag ConfigVarsBag)
+{
+	return ConfigVarsBag.LoadData(Outer);
+}
+
+void UConfigVarsBagReader::LoadData_Async(UObject* Outer, FConfigVarsBag ConfigVarsBag, FOnConfigVarsAsyncCallBack CallBack)
+{
+	ConfigVarsBag.LoadData_Async(Outer, CallBack);
+}
+
 FConfigVarsBag::~FConfigVarsBag()
 {
 #if WITH_EDITOR
@@ -37,7 +47,7 @@ bool FConfigVarsBag::Serialize(FArchive& Ar)
 	return true;
 }
 
-const UConfigVarsData* FConfigVarsBag::GetData(UObject* Outer)
+const UConfigVarsData* FConfigVarsBag::LoadData(UObject* Outer)
 {
 	UConfigVarsData* ConfigVarsData = nullptr;
 
@@ -70,7 +80,7 @@ const UConfigVarsData* FConfigVarsBag::GetData(UObject* Outer)
 	UConfigVarsLinker* ConfigVarsLinker = FindObject<UConfigVarsLinker>(Package, TEXT("ConfigVarsLinker"));
 	if (ConfigVarsLinker)
 	{
-		ConfigVarsData = ConfigVarsLinker->FindData(ExportIndex);
+		ConfigVarsData = ConfigVarsLinker->LoadData(ExportIndex);
 	}
 
 
@@ -85,8 +95,55 @@ const UConfigVarsData* FConfigVarsBag::GetData(UObject* Outer)
 
 }
 
+void FConfigVarsBag::LoadData_Async(UObject* Outer, FOnConfigVarsAsyncCallBack CallBack)
+{
+	UConfigVarsData* ConfigVarsData = nullptr;
+
+	if (!Outer)
+	{
+		CallBack.ExecuteIfBound({ConfigVarsData});
+		return;
+	}
+
+	if (ExportIndex == INDEX_NONE)	// ExportIndex不存在，不可能找到记录，直接退出
+	{
+		CallBack.ExecuteIfBound({ ConfigVarsData });
+		return;
+	}
+
+	UPackage* Package = Outer->GetPackage();
+
+#if !WITH_EDITOR
+	static FConfigVarsLRUCache GlobalConfigVarsDataCache(LRUCacheMaxNum);
+
+	// 第一级，在缓存优化中寻找，还需要提供资源移除。(Editor 不会走这里，否则会扰乱原有的新增、修改和删除流程)
+	ConfigVarsData = GlobalConfigVarsDataCache.FindAndTouchRef(Package->GetPackageIdToLoad(), ExportIndex);
+	if (ConfigVarsData)
+	{
+		CallBack.ExecuteIfBound({ ConfigVarsData });
+		return;
+	}
+#endif
+
+
+	// 由ConfigVarsLinker继续寻找
+	UConfigVarsLinker* ConfigVarsLinker = FindObject<UConfigVarsLinker>(Package, TEXT("ConfigVarsLinker"));
+	if (ConfigVarsLinker)
+	{
+		ConfigVarsLinker->LoadData_Async(ExportIndex, FLoadConfigVarsAsyncDelegate::CreateWeakLambda(Outer, [Package, ExportIndex = ExportIndex, CallBack](TArray<UConfigVarsData*> OutObjects) {
+#if !WITH_EDITOR
+			if (!OutObjects.IsEmpty() && OutObjects[0])
+			{
+				GlobalConfigVarsDataCache.Add(Package->GetPackageIdToLoad(), ExportIndex, OutObjects[0]);
+			}
+#endif
+			CallBack.ExecuteIfBound(OutObjects);
+		}));
+	}
+}
+
 #if WITH_EDITOR
-UConfigVarsData* FConfigVarsBag::LoadData(UObject* Outer, const UClass* DataClass)
+UConfigVarsData* FConfigVarsBag::LoadOrAddData(UObject* Outer, const UClass* DataClass)
 {
 	UConfigVarsData* ConfigVarsData = nullptr;
 
@@ -110,7 +167,7 @@ UConfigVarsData* FConfigVarsBag::LoadData(UObject* Outer, const UClass* DataClas
 	}
 	if (ConfigVarsLinker)
 	{
-		ConfigVarsData = ConfigVarsLinker->LoadData(ExportIndex, DataClass);
+		ConfigVarsData = ConfigVarsLinker->LoadOrAddData(ExportIndex, DataClass);
 	}
 
 	return ConfigVarsData;

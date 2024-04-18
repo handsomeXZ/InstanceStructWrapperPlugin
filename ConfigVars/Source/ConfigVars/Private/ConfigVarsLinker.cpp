@@ -336,10 +336,10 @@ void UConfigVarsLinker::VerifyAllExportLoaded()
 		if (!ExportObjects[Index] && ExportTable[Index].ClassIndex != INDEX_NONE)
 		{
 #if WITH_EDITOR
-			LoadData(Index, nullptr);
+			LoadOrAddData(Index, nullptr);
 #else
-			// FindData 会走异步加载，Cook时不能使用
-			FindData(Index);
+			// LoadData 会走异步加载，Cook时不能使用
+			LoadData(Index);
 #endif
 		}
 	}
@@ -347,29 +347,125 @@ void UConfigVarsLinker::VerifyAllExportLoaded()
 
 void UConfigVarsLinker::LoadImports_Sync(TArray<int32> ExportIndexs)
 {
-	FlushAsyncLoading(LoadImports_Async(ExportIndexs, FLoadConfigVarsAsyncDelegate()));
+	TArray<int32> AsyncLoadRequestIDs;
+
+	for (int32 ExportIndex : ExportIndexs)
+	{
+		FConfigVarsExport& Export = ExportTable[ExportIndex];
+		// Class
+		AsyncLoadRequestIDs.Add(LoadImport_Async(Export.ClassIndex, FLoadPackageAsyncDelegate()));
+
+		// Dependency
+		for (FBitArray::FIterator It(Export.ImportSet); It; ++It)
+		{
+			int32 Index = *It;
+			AsyncLoadRequestIDs.Add(LoadImport_Async(Index, FLoadPackageAsyncDelegate()));
+		}
+	}
+
+	FlushAsyncLoading(AsyncLoadRequestIDs);
 }
 
-TArray<int32> UConfigVarsLinker::LoadImports_Async(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack)
+int32 UConfigVarsLinker::LoadImport_Async(int32 ExportIndex, FLoadPackageAsyncDelegate CallBack)
 {
 	// 暂时不支持UObjectRedirector
 
-	TArray<int32> AsyncLoadRequestIDs;
-	TArray<int32> PendingLoadImport;
+	FConfigVarsImport& Import = ImportTable[ExportIndex];
+	if (UPackage* ExistingPackage = FindObjectFast<UPackage>(/*Outer =*/nullptr, Import.ObjectPath.GetLongPackageFName()))
+	{
+		if (Import.ObjectPath.IsAsset())
+		{
+			if (UObject* ExistingObject = FindObjectFast<UObject>(ExistingPackage, Import.ObjectPath.GetAssetFName()))
+			{
+				return INDEX_NONE;
+			}
+		}
+		else if (Import.ObjectPath.IsSubobject())
+		{
+			if (UObject* ExistingObject = FindObject<UObject>(ExistingPackage, *Import.ObjectPath.GetSubPathString()))
+			{
+				return INDEX_NONE;
+			}
+		}
+	}
 
+	constexpr int32 PIEInstanceID = INDEX_NONE;
+	constexpr int32 Priority = INT32_MAX;
+	return LoadPackageAsync(Import.ObjectPath.GetAssetPath().GetPackageName().ToString(), CallBack, Priority, PKG_None, PIEInstanceID);
+}
+
+void UConfigVarsLinker::PushToPendingLoadExports(const TArray<int32>& ExportIndexs)
+{
+	for (auto Index : ExportIndexs)
+	{
+		// 不需要每次都new一个对象，直接将Index转指针就行。但必须 +1，因为 0 == NULL
+#pragma warning(disable: 4312)
+		PendingLoadExports_Async.Push(reinterpret_cast<void*>(Index + 1));
+#pragma warning(default: 4312)
+	}
+}
+
+void UConfigVarsLinker::LoadExports_Sync(TArray<int32> ExportIndexs, TArray<UConfigVarsData*>& ExportObjs)
+{
+	if (ExportIndexs.IsEmpty())
+	{
+		return;
+	}
+
+	PushToPendingLoadExports(ExportIndexs);
+
+	constexpr int32 PIEInstanceID = INDEX_NONE;
+	constexpr int32 Priority = INT32_MAX;
+
+	UPackage* Package = GetPackage();
+
+	this->ClearFlags(RF_NeedLoad | RF_WasLoaded | RF_LoadCompleted);
+	this->SetFlags(RF_Public | RF_NeedPostLoad | RF_NeedPostLoadSubobjects | RF_WillBeLoaded);
+
+	int32 AsyncLoadRequestID = LoadPackageAsync(Package->GetLoadedPath(), Package->GetFName(), FLoadPackageAsyncDelegate(), PKG_None, PIEInstanceID, Priority, nullptr, LOAD_NoVerify);
+
+	if (AsyncLoadRequestID != INDEX_NONE)
+	{
+		FlushAsyncLoading(AsyncLoadRequestID);
+	}
+
+	this->ClearFlags(RF_NeedLoad | RF_NeedPostLoad | RF_NeedPostLoadSubobjects | RF_WillBeLoaded);
+	this->SetFlags(RF_Public | RF_WasLoaded | RF_LoadCompleted);
+
+	for (int32 Index : ExportIndexs)
+	{
+		UConfigVarsData* ExistingObject = FindObjectFast<UConfigVarsData>(this, ExportTable[Index].ObjectName);
+		ExportObjs.Add(ExistingObject);
+	}
+}
+
+void UConfigVarsLinker::LoadExports_Async_Request(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack)
+{
+	if (ExportIndexs.IsEmpty())
+	{
+		TArray<UConfigVarsData*> NullObjs;
+		CallBack.ExecuteIfBound(NullObjs);
+		return;
+	}
+
+	PushToPendingLoadExports(ExportIndexs);
+
+	LoadExports_Async_LoadImports(ExportIndexs, CallBack);
+}
+
+void UConfigVarsLinker::LoadExports_Async_LoadImports(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack)
+{
 	FLoadPackageAsyncDelegate LoadPackageAsyncDelegate;
 	FGuid CounterID;
 
-	if (CallBack.IsBound())
-	{
-		CounterID = FGuid::NewGuid();
-		LoadPackageAsyncDelegate = FLoadPackageAsyncDelegate::CreateWeakLambda(this, [this, ExportIndexs, CounterID, CallBack](const FName&, UPackage*, EAsyncLoadingResult::Type Result)
+	CounterID = FGuid::NewGuid();
+	LoadPackageAsyncDelegate = FLoadPackageAsyncDelegate::CreateWeakLambda(this, [this, ExportIndexs, CounterID, CallBack](const FName&, UPackage*, EAsyncLoadingResult::Type Result)
 		{
 			// GameThread
 
 			if (Result != EAsyncLoadingResult::Succeeded)
 			{
-				// 有依赖加载失败了
+				// 依赖加载失败
 				LoadingImportCounter.Remove(CounterID);
 				TArray<UConfigVarsData*> NullObjs;
 				CallBack.ExecuteIfBound(NullObjs);
@@ -384,124 +480,36 @@ TArray<int32> UConfigVarsLinker::LoadImports_Async(TArray<int32> ExportIndexs, F
 
 			if (LoadingImportCounter[CounterID]-- == 1)
 			{
-				LoadExports_Async_Internal(ExportIndexs, CallBack);
+				LoadExports_Async_LoadExports(ExportIndexs, CallBack);
 			}
 		});
-	}
 
-	auto AsyncLoadImport = [&AsyncLoadRequestIDs, &PendingLoadImport, &LoadPackageAsyncDelegate, this](FConfigVarsImport& Import) {
-		if (UPackage* ExistingPackage = FindObjectFast<UPackage>(/*Outer =*/nullptr, Import.ObjectPath.GetLongPackageFName()))
-		{
-			if (Import.ObjectPath.IsAsset())
-			{
-				if (UObject* ExistingObject = FindObjectFast<UObject>(ExistingPackage, Import.ObjectPath.GetAssetFName()))
-				{
-					return;
-				}
-			}
-			else if (Import.ObjectPath.IsSubobject())
-			{
-				if (UObject* ExistingObject = FindObject<UObject>(ExistingPackage, *Import.ObjectPath.GetSubPathString()))
-				{
-					return;
-				}
-			}
-		}
-
-		constexpr int32 PIEInstanceID = INDEX_NONE;
-		constexpr int32 Priority = INT32_MAX;
-		AsyncLoadRequestIDs.Add(LoadPackageAsync(Import.ObjectPath.GetAssetPath().GetPackageName().ToString(), LoadPackageAsyncDelegate, Priority, PKG_None, PIEInstanceID));
-	};
-
-
+	int32 LoadNum = 0;
 	for (int32 ExportIndex : ExportIndexs)
 	{
 		FConfigVarsExport& Export = ExportTable[ExportIndex];
 		// Class
-		FConfigVarsImport& ClassImport = ImportTable[Export.ClassIndex];
-		AsyncLoadImport(ClassImport);
+		if (LoadImport_Async(Export.ClassIndex, LoadPackageAsyncDelegate) != INDEX_NONE)
+		{
+			++LoadNum;
+		}
+		
 
 		// Dependency
 		for (FBitArray::FIterator It(Export.ImportSet); It; ++It)
 		{
 			int32 Index = *It;
-			FConfigVarsImport& Import = ImportTable[Index];
-
-			AsyncLoadImport(Import);
+			if (LoadImport_Async(Index, LoadPackageAsyncDelegate) != INDEX_NONE)
+			{
+				++LoadNum;
+			}
 		}
 	}
 
-	if (CallBack.IsBound())
-	{
-		LoadingImportCounter.Add(CounterID, AsyncLoadRequestIDs.Num());
-	}
-
-	return AsyncLoadRequestIDs;
+	LoadingImportCounter.Add(CounterID, LoadNum);
 }
 
-void UConfigVarsLinker::LoadExports_Sync(TArray<int32> ExportIndexs, TArray<UConfigVarsData*>& ExportObjs)
-{
-	if (ExportIndexs.IsEmpty())
-	{
-		return;
-	}
-
-	LoadExports_Async(ExportIndexs, FLoadConfigVarsAsyncDelegate());
-
-	for (int32 Index : ExportIndexs)
-	{
-		UConfigVarsData* ExistingObject = FindObjectFast<UConfigVarsData>(this, ExportTable[Index].ObjectName);
-		ExportObjs.Add(ExistingObject);
-	}
-}
-
-void UConfigVarsLinker::LoadExports_Async(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack)
-{
-	if (ExportIndexs.IsEmpty())
-	{
-		TArray<UConfigVarsData*> NullObjs;
-		CallBack.ExecuteIfBound(NullObjs);
-		return;
-	}
-
-	for (int32 Index : ExportIndexs)
-	{
-		// 不需要每次都new一个对象，直接将Index转指针就行。但必须 +1，因为 0 == NULL
-#pragma warning(disable: 4312)
-		PendingLoadExports_Async.Push(reinterpret_cast<void*>(Index + 1));
-#pragma warning(default: 4312)
-	}
-
-	if (CallBack.IsBound())
-	{
-		FGuid UniqueGuid = FGuid::NewGuid();
-
-		LoadImports_Async(ExportIndexs, CallBack);
-	}
-	else
-	{
-		constexpr int32 PIEInstanceID = INDEX_NONE;
-		constexpr int32 Priority = INT32_MAX;
-
-		UPackage* Package = GetPackage();
-
-		this->ClearFlags(RF_NeedLoad | RF_WasLoaded | RF_LoadCompleted);
-		this->SetFlags(RF_Public | RF_NeedPostLoad | RF_NeedPostLoadSubobjects | RF_WillBeLoaded);
-		
-		int32 AsyncLoadRequestID = LoadPackageAsync(Package->GetLoadedPath(), Package->GetFName(), FLoadPackageAsyncDelegate(), PKG_None, PIEInstanceID, Priority, nullptr, LOAD_NoVerify);
-		
-		if (AsyncLoadRequestID != INDEX_NONE)
-		{
-			FlushAsyncLoading(AsyncLoadRequestID);
-		}
-
-		this->ClearFlags(RF_NeedLoad | RF_NeedPostLoad | RF_NeedPostLoadSubobjects | RF_WillBeLoaded);
-		this->SetFlags(RF_Public | RF_WasLoaded | RF_LoadCompleted);
-	}
-
-}
-
-void UConfigVarsLinker::LoadExports_Async_Internal(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack)
+void UConfigVarsLinker::LoadExports_Async_LoadExports(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack)
 {
 	UPackage* Package = GetPackage();
 	this->ClearFlags(RF_NeedLoad | RF_WasLoaded | RF_LoadCompleted);
@@ -532,6 +540,7 @@ void UConfigVarsLinker::LoadExports_Async_Internal(TArray<int32> ExportIndexs, F
 		for (int32 Index : ExportIndexs)
 		{
 			UConfigVarsData* ExistingObject = FindObjectFast<UConfigVarsData>(this, ExportTable[Index].ObjectName);
+			ExportObjects[Index] = ExistingObject;
 			ExportObjs.Add(ExistingObject);
 		}
 		CallBack.ExecuteIfBound(ExportObjs);
@@ -539,7 +548,7 @@ void UConfigVarsLinker::LoadExports_Async_Internal(TArray<int32> ExportIndexs, F
 	}), PKG_None, PIEInstanceID, Priority, nullptr, LOAD_NoVerify);
 }
 
-UConfigVarsData* UConfigVarsLinker::FindData(int32 ExportIndex)
+UConfigVarsData* UConfigVarsLinker::LoadData(int32 ExportIndex)
 {
 	UConfigVarsData* ConfigVarsData = nullptr;
 
@@ -582,6 +591,39 @@ UConfigVarsData* UConfigVarsLinker::FindData(int32 ExportIndex)
 	return ConfigVarsData;
 }
 
+void UConfigVarsLinker::LoadData_Async(int32 ExportIndex, FLoadConfigVarsAsyncDelegate CallBack)
+{
+	UConfigVarsData* ConfigVarsData = nullptr;
+
+	if (ExportIndex == INDEX_NONE || !ExportTable.IsValidIndex(ExportIndex))
+	{
+		CallBack.ExecuteIfBound({ ConfigVarsData });
+		return;
+	}
+
+	FConfigVarsExport& Export = ExportTable[ExportIndex];
+
+	// 第二级，在本身的数组中寻找。
+	if (IsValid(ExportObjects[ExportIndex]))
+	{
+		CallBack.ExecuteIfBound({ ExportObjects[ExportIndex] });
+		return;
+	}
+
+
+	// 第三级，在内存中寻找。（可能已经被踢出了缓存，但是仍被别的可达对象所引用）
+	ConfigVarsData = FindObject<UConfigVarsData>(this, *(Export.ObjectName.ToString()));
+
+
+	/************************************************************************/
+	/* 第四级，反序列化															*/
+	/************************************************************************/
+	if (!ConfigVarsData && Export.ClassIndex != INDEX_NONE)
+	{
+		LoadExports_Async_Request({ ExportIndex }, CallBack);
+	}
+}
+
 #if WITH_EDITOR
 FLinkerLoad* UConfigVarsLinker::CreateLinker_Sync()
 {
@@ -600,7 +642,7 @@ FLinkerLoad* UConfigVarsLinker::CreateLinker_Sync()
 	return Linker;
 }
 
-UConfigVarsData* UConfigVarsLinker::LoadData(int32& InOutExportIndex, const UClass* TemplateDataClass)
+UConfigVarsData* UConfigVarsLinker::LoadOrAddData(int32& InOutExportIndex, const UClass* TemplateDataClass)
 {
 	UConfigVarsData* ConfigVarsData = nullptr;
 
@@ -698,11 +740,6 @@ void UConfigVarsLinker::RemoveData(int32 ExportIndex)
 #endif
 
 //////////////////////////////////////////////////////////////////////////
-
-const UConfigVarsData* UConfigVarsData::K2_GetData(UObject* DataOuter, FConfigVarsBag ConfigVarsBag)
-{
-	return ConfigVarsBag.GetData(DataOuter);
-}
 
 void UConfigVarsData::SerializeConfigVars(FArchiveConfigVars& ConfigVarsAr, FArchive& RealAr)
 {

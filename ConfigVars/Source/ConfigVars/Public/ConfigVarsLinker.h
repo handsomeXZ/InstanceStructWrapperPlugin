@@ -87,10 +87,11 @@ public:
 	// 序列化为Import（这里记录的ImportObject，仅会在对应的ExportObject加载前才会被加载）
 	int32 ImportObject(class UObject* ImportObj);
 
-	UConfigVarsData* FindData(int32 ExportIndex);
+	UConfigVarsData* LoadData(int32 ExportIndex);
+	void LoadData_Async(int32 ExportIndex, FLoadConfigVarsAsyncDelegate CallBack);
 
 #if WITH_EDITOR
-	UConfigVarsData* LoadData(int32& InOutExportIndex, const UClass* TemplateDataClass);
+	UConfigVarsData* LoadOrAddData(int32& InOutExportIndex, const UClass* TemplateDataClass);
 	void RemoveData(int32 ExportIndex);
 #endif
 
@@ -107,14 +108,20 @@ private:
 
 	// 真正反序列化Export数据
 	void ProcessPendingLoadExports(FStructuredArchive::FRecord Record);
+	void PushToPendingLoadExports(const TArray<int32>& ExportIndexs);
 	
+	// 同步加载Imports（批量加载可以起到优化作用）
 	void LoadImports_Sync(TArray<int32> ExportIndexs);
+	// 同步加载Exports（批量加载可以起到优化作用）
 	void LoadExports_Sync(TArray<int32> ExportIndexs, TArray<UConfigVarsData*>& ExportObjs);
 
-	// @TODO：这里接口的设计有点怪
-	TArray<int32> LoadImports_Async(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack);
-	void LoadExports_Async(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack);
-	void LoadExports_Async_Internal(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack);
+	// 异步加载Import（非批量）
+	int32 LoadImport_Async(int32 ExportIndex, FLoadPackageAsyncDelegate CallBack);
+
+	// 异步加载Exports（批量加载可以起到优化作用）
+	void LoadExports_Async_Request(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack);
+	void LoadExports_Async_LoadImports(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack);
+	void LoadExports_Async_LoadExports(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack);
 
 	// 确保所有Export都被加载
 	void VerifyAllExportLoaded();
@@ -157,10 +164,7 @@ UCLASS(Abstract)
 class CONFIGVARS_API UConfigVarsData : public UObject
 {
 	GENERATED_BODY()
-	public:
-	UFUNCTION(BlueprintCallable, Category = ConfigVarsData)
-	static const UConfigVarsData* K2_GetData(UObject* DataOuter, FConfigVarsBag ConfigVarsBag);
-
+public:
 	virtual void Serialize(FArchive& Ar) override final {}
 	virtual void Serialize(FStructuredArchive::FRecord Record) override final {}
 
