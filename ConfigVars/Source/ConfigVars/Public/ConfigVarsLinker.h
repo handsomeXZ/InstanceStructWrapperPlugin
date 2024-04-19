@@ -10,25 +10,6 @@ typedef TMap<int32, UObject*> FImportObjectMap;
 
 DECLARE_DELEGATE_OneParam(FLoadConfigVarsAsyncDelegate, TArray<UConfigVarsData*>);
 
-class FArchiveConfigVars : public FArchive
-{
-public:
-	FArchiveConfigVars(FArchive& Ar, UConfigVarsLinker* Linker, bool bIsLoading, bool bIsSaving);
-
-	using FArchive::operator<<; // For visibility of the overloads we don't override
-
-	template<typename ValueType>
-	FArchive& operator<<(ValueType& Value) { return RealArchive << Value; }
-
-	//~ Begin FArchive Interface
-	virtual FArchive& operator<<(UObject*& Obj) override;
-	//~ End FArchive Interface
-
-private:
-	FArchive& RealArchive;
-	UConfigVarsLinker* ConfigVarsLinker;
-};
-
 struct FConfigVarsImport
 {
 	FConfigVarsImport() {}
@@ -88,7 +69,7 @@ public:
 	int32 ImportObject(class UObject* ImportObj);
 
 	UConfigVarsData* LoadData(int32 ExportIndex);
-	void LoadData_Async(int32 ExportIndex, FLoadConfigVarsAsyncDelegate CallBack);
+	void LoadData_Async(int32 ExportIndex, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
 
 #if WITH_EDITOR
 	UConfigVarsData* LoadOrAddData(int32& InOutExportIndex, const UClass* TemplateDataClass);
@@ -97,6 +78,7 @@ public:
 
 private:
 	friend class FArchiveConfigVars;
+	friend class FConfigVarsUtils;
 
 	// 是否跳过反序列化
 	void SerializeHeadData(FStructuredArchive::FRecord Record);
@@ -116,12 +98,12 @@ private:
 	void LoadExports_Sync(TArray<int32> ExportIndexs, TArray<UConfigVarsData*>& ExportObjs);
 
 	// 异步加载Import（非批量）
-	int32 LoadImport_Async(int32 ExportIndex, FLoadPackageAsyncDelegate CallBack);
+	int32 LoadImport_Async(int32 ExportIndex, FLoadPackageAsyncDelegate CallBack, int32 Priority);
 
 	// 异步加载Exports（批量加载可以起到优化作用）
-	void LoadExports_Async_Request(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack);
-	void LoadExports_Async_LoadImports(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack);
-	void LoadExports_Async_LoadExports(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack);
+	void LoadExports_Async_Request(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
+	void LoadExports_Async_LoadImports(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
+	void LoadExports_Async_LoadExports(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
 
 	// 确保所有Export都被加载
 	void VerifyAllExportLoaded();
@@ -168,12 +150,13 @@ public:
 	virtual void Serialize(FArchive& Ar) override final {}
 	virtual void Serialize(FStructuredArchive::FRecord Record) override final {}
 
-	virtual void SerializeConfigVars(FArchiveConfigVars& ConfigVarsAr, FArchive& RealAr);
+	virtual void SerializeConfigVars(FStructuredArchive::FRecord ExportRecord, UConfigVarsLinker* Linker);
 
 private:
-	// @TODO: 仿照FLinkerLoad::ConstructExportsReaders()进行优化，现在在改动数据结构以后，Serialize会报错（因为是完全流式的）。
 	template<typename SrcType>
-	void Serialize_Internal(FArchiveConfigVars& ConfigVarsAr, FArchive& RealAr, const UStruct* DataStruct, SrcType* SrcData);
+	void SerializeProperties(FStructuredArchive::FRecord ExportRecord, UConfigVarsLinker* Linker, const UStruct* DataStruct, SrcType* SrcData);
+	template<typename SrcType>
+	void SerializeItem(FStructuredArchive::FRecord PropertyRecord, FProperty* ChildProperty, UConfigVarsLinker* Linker, const UStruct* DataStruct, SrcType* SrcData);
 };
 
 template<>

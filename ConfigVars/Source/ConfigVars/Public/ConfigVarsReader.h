@@ -14,6 +14,11 @@
 
 class UConfigVarsData;
 
+// Default priority for all async loads
+static const int32 DefaultAsyncLoadPriority = 0;
+// Priority to try and load immediately
+static const int32 AsyncLoadHighPriority = INT32_MAX;
+
 DECLARE_DYNAMIC_DELEGATE_OneParam(FOnConfigVarsAsyncCallBack, const TArray<UConfigVarsData*>&, OutObjects);
 
 USTRUCT(BlueprintType)
@@ -24,7 +29,7 @@ public:
 	virtual ~FConfigVarsBag();
 
 	const UConfigVarsData* LoadData(UObject* Outer);
-	void LoadData_Async(UObject* Outer, FOnConfigVarsAsyncCallBack CallBack);
+	void LoadData_Async(UObject* Outer, FOnConfigVarsAsyncCallBack CallBack, int32 Priority = DefaultAsyncLoadPriority);
 
 	template<typename T>
 	const T* LoadData(UObject* Outer)
@@ -65,7 +70,7 @@ public:
 	static const UConfigVarsData* LoadData(UObject* Outer, FConfigVarsBag ConfigVarsBag);
 
 	UFUNCTION(BlueprintCallable, Category = ConfigVarsData)
-	static void LoadData_Async(UObject* Outer, FConfigVarsBag ConfigVarsBag, FOnConfigVarsAsyncCallBack CallBack);
+	static void LoadData_Async(UObject* Outer, FConfigVarsBag ConfigVarsBag, FOnConfigVarsAsyncCallBack CallBack, int32 Priority);
 };
 
 /************************************************************************/

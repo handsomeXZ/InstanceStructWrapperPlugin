@@ -3,85 +3,99 @@
 #include "PrivateAccessor.h"
 #include "HAL/FileManagerGeneric.h"
 
+PRIVATE_DEFINE_VAR(FLinkerLoad, TOptional<FStructuredArchive::FRecord>, StructuredArchiveRootRecord);
+
+DEFINE_LOG_CATEGORY_STATIC(LogConfigVarsLinker, Log, All);
+
 struct FSerialSizeScope
 {
-	FSerialSizeScope(FArchive& Ar)
+	FSerialSizeScope(FArchive& Ar, int32& InSerialSize)
 		: HeadOffset(Ar.Tell())
 		, Archive(Ar)
+		, SerialSize(InSerialSize)
 	{
-		int32 SerialSize = 0;
-		Archive << SerialSize;	// 先占位
+		Archive << SerialSize;
 
-		InitialOffset = Archive.Tell();
+		if (Ar.IsSaving())
+		{
+			InitialOffset = Archive.Tell();
+		}
 	}
 	~FSerialSizeScope()
 	{
-		const int64 FinalOffset = Archive.Tell();
+		if (Archive.IsSaving())
+		{
+			const int64 FinalOffset = Archive.Tell();
 
-		Archive.Seek(HeadOffset);	// 覆写占位数据
-		int32 SerialSize = (int32)(FinalOffset - InitialOffset);
-		Archive << SerialSize;
-		Archive.Seek(FinalOffset);	// 还原偏移
+			Archive.Seek(HeadOffset);	// 覆写占位数据
+			SerialSize = (int32)(FinalOffset - InitialOffset);
+			Archive << SerialSize;
+			Archive.Seek(FinalOffset);	// 还原偏移
+		}
 	}
 
 private:
 	int64 HeadOffset;
 	int64 InitialOffset;
 	FArchive& Archive;
+	int32& SerialSize;
 };
 
-FArchiveConfigVars::FArchiveConfigVars(FArchive& Ar, UConfigVarsLinker* Linker, bool bIsLoading, bool bIsSaving)
-	: RealArchive(Ar)
-	, ConfigVarsLinker(Linker)
+class FConfigVarsUtils
 {
-	SetIsLoading(bIsLoading);
-	SetIsSaving(bIsSaving);
-}
-
-FArchive& FArchiveConfigVars::operator <<(UObject*& Obj)
-{
-	if (RealArchive.IsSaving())
+public:
+	static void SerializeObject(FStructuredArchive::FRecord Record, UConfigVarsLinker* Linker, UObject*& Obj)
 	{
-		if (IsValid(Obj))
-		{
-			int32 ImportIndex = ConfigVarsLinker->ImportObject(Obj);
-			RealArchive << ImportIndex;
-		}
-		else
-		{
-			int32 NullImportIndex = -1;
-			RealArchive << NullImportIndex;
-		}
-	}
-	else if (RealArchive.IsLoading())
-	{
-		int32 ImportIndex = -1;
-		RealArchive << ImportIndex;
+		FArchive& Ar = Record.GetUnderlyingArchive();
 
-		Obj = nullptr;
-		FConfigVarsImport& Import = ConfigVarsLinker->ImportTable[ImportIndex];
-
-		if (UPackage* ExistingPackage = FindObjectFast<UPackage>(/*Outer =*/nullptr, Import.ObjectPath.GetLongPackageFName()))
+		if (Ar.IsSaving())
 		{
-			if (Import.ObjectPath.IsAsset())
+			if (IsValid(Obj))
 			{
-				if (UObject* ExistingObject = FindObjectFast<UObject>(ExistingPackage, Import.ObjectPath.GetAssetFName()))
-				{
-					Obj = ExistingObject;
-				}
+				int32 ImportIndex = Linker->ImportObject(Obj);
+				Record << SA_VALUE(TEXT("ImportIndex"), ImportIndex);
 			}
-			else if (Import.ObjectPath.IsSubobject())
+			else
 			{
-				if (UObject* ExistingObject = FindObject<UObject>(ExistingPackage, *Import.ObjectPath.GetSubPathString()))
-				{
-					Obj = ExistingObject;
-				}
+				int32 NullImportIndex = INDEX_NONE;
+				Record << SA_VALUE(TEXT("ImportIndex"), NullImportIndex);
 			}
 		}
-	}
+		else if (Ar.IsLoading())
+		{
+			int32 ImportIndex = INDEX_NONE;
+			Record << SA_VALUE(TEXT("ImportIndex"), ImportIndex);
 
-	return *this;
-}
+			Obj = nullptr;
+
+			if (ImportIndex == INDEX_NONE)
+			{
+				return;
+			}
+
+			FConfigVarsImport& Import = Linker->ImportTable[ImportIndex];
+
+			if (UPackage* ExistingPackage = FindObjectFast<UPackage>(/*Outer =*/nullptr, Import.ObjectPath.GetLongPackageFName()))
+			{
+				if (Import.ObjectPath.IsAsset())
+				{
+					if (UObject* ExistingObject = FindObjectFast<UObject>(ExistingPackage, Import.ObjectPath.GetAssetFName()))
+					{
+						Obj = ExistingObject;
+					}
+				}
+				else if (Import.ObjectPath.IsSubobject())
+				{
+					if (UObject* ExistingObject = FindObject<UObject>(ExistingPackage, *Import.ObjectPath.GetSubPathString()))
+					{
+						Obj = ExistingObject;
+					}
+				}
+			}
+		}
+
+	}
+};
 
 FArchive& operator<<(FArchive& Ar, FConfigVarsImport& Import)
 {
@@ -175,7 +189,8 @@ void UConfigVarsLinker::SerializeExportData(FStructuredArchive::FRecord Record)
 
 	if (Ar.IsSaving())
 	{
-		FSerialSizeScope Scope(Ar);	// ExportDataSize
+		int32 ExportDataSize = 0;
+		FSerialSizeScope Scope(Ar, ExportDataSize);	// ExportDataSize
 
 		for (UConfigVarsData* ExportObj : ExportObjects)
 		{
@@ -188,7 +203,7 @@ void UConfigVarsLinker::SerializeExportData(FStructuredArchive::FRecord Record)
 	else if (Ar.IsLoading())
 	{
 		int32 ExportDataSize = 0;
-		Ar << ExportDataSize;
+		FSerialSizeScope Scope(Ar, ExportDataSize);	// ExportDataSize
 
 		// 跳过这部分数据的反序列化
 		//FArchiveFileReaderGeneric& FileReader = static_cast<FArchiveFileReaderGeneric&>(Ar.GetLoader());
@@ -202,14 +217,15 @@ void UConfigVarsLinker::SerializeTableData(FStructuredArchive::FRecord Record)
 
 	if (Ar.IsSaving())
 	{
-		FSerialSizeScope Scope(Ar);	// TableDataSize
+		int32 TableDataSize = 0;
+		FSerialSizeScope Scope(Ar, TableDataSize);	// TableDataSize
 		Ar << ImportTable;
 		Ar << ExportTable;
 	}
 	else if (Ar.IsLoading())
 	{
 		int32 TableDataSize = 0;
-		Ar << TableDataSize;
+		FSerialSizeScope Scope(Ar, TableDataSize);	// TableDataSize
 
 		Ar << ImportTable;
 		Ar << ExportTable;
@@ -262,9 +278,7 @@ void UConfigVarsLinker::ProcessPendingLoadExports(FStructuredArchive::FRecord Re
 			// 反序列化Object的数据
 			Ar.Seek(Export.SerialLocation - SerializeHeadOffset);
 
-			FArchiveConfigVars ConfigVarsAr(Ar, this, true, false);
-
-			NewObj->SerializeConfigVars(ConfigVarsAr, Ar);
+			NewObj->SerializeConfigVars(Record, this);
 		}
 	}
 
@@ -301,13 +315,11 @@ void UConfigVarsLinker::ExportObject(FStructuredArchive::FRecord Record, class U
 {
 	FArchive& Ar = Record.GetUnderlyingArchive();
 
-	FArchiveConfigVars ConfigVarsAr(Ar, this, false, true);
-
 	int32 InitialImportNum = ImportTable.Num();
 
 	int32 InitialOffset = Ar.Tell();
 	{
-		ExportObj->SerializeConfigVars(ConfigVarsAr, Ar);
+		ExportObj->SerializeConfigVars(Record, this);
 	}
 
 	int32 FinalImportNum = ImportTable.Num();
@@ -353,20 +365,20 @@ void UConfigVarsLinker::LoadImports_Sync(TArray<int32> ExportIndexs)
 	{
 		FConfigVarsExport& Export = ExportTable[ExportIndex];
 		// Class
-		AsyncLoadRequestIDs.Add(LoadImport_Async(Export.ClassIndex, FLoadPackageAsyncDelegate()));
+		AsyncLoadRequestIDs.Add(LoadImport_Async(Export.ClassIndex, FLoadPackageAsyncDelegate(), AsyncLoadHighPriority));
 
 		// Dependency
 		for (FBitArray::FIterator It(Export.ImportSet); It; ++It)
 		{
 			int32 Index = *It;
-			AsyncLoadRequestIDs.Add(LoadImport_Async(Index, FLoadPackageAsyncDelegate()));
+			AsyncLoadRequestIDs.Add(LoadImport_Async(Index, FLoadPackageAsyncDelegate(), AsyncLoadHighPriority));
 		}
 	}
 
 	FlushAsyncLoading(AsyncLoadRequestIDs);
 }
 
-int32 UConfigVarsLinker::LoadImport_Async(int32 ExportIndex, FLoadPackageAsyncDelegate CallBack)
+int32 UConfigVarsLinker::LoadImport_Async(int32 ExportIndex, FLoadPackageAsyncDelegate CallBack, int32 Priority /* = DefaultAsyncLoadPriority */)
 {
 	// 暂时不支持UObjectRedirector
 
@@ -390,7 +402,6 @@ int32 UConfigVarsLinker::LoadImport_Async(int32 ExportIndex, FLoadPackageAsyncDe
 	}
 
 	constexpr int32 PIEInstanceID = INDEX_NONE;
-	constexpr int32 Priority = INT32_MAX;
 	return LoadPackageAsync(Import.ObjectPath.GetAssetPath().GetPackageName().ToString(), CallBack, Priority, PKG_None, PIEInstanceID);
 }
 
@@ -415,7 +426,7 @@ void UConfigVarsLinker::LoadExports_Sync(TArray<int32> ExportIndexs, TArray<UCon
 	PushToPendingLoadExports(ExportIndexs);
 
 	constexpr int32 PIEInstanceID = INDEX_NONE;
-	constexpr int32 Priority = INT32_MAX;
+	constexpr int32 Priority = AsyncLoadHighPriority;
 
 	UPackage* Package = GetPackage();
 
@@ -439,7 +450,7 @@ void UConfigVarsLinker::LoadExports_Sync(TArray<int32> ExportIndexs, TArray<UCon
 	}
 }
 
-void UConfigVarsLinker::LoadExports_Async_Request(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack)
+void UConfigVarsLinker::LoadExports_Async_Request(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority)
 {
 	if (ExportIndexs.IsEmpty())
 	{
@@ -450,16 +461,16 @@ void UConfigVarsLinker::LoadExports_Async_Request(TArray<int32> ExportIndexs, FL
 
 	PushToPendingLoadExports(ExportIndexs);
 
-	LoadExports_Async_LoadImports(ExportIndexs, CallBack);
+	LoadExports_Async_LoadImports(ExportIndexs, CallBack, Priority);
 }
 
-void UConfigVarsLinker::LoadExports_Async_LoadImports(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack)
+void UConfigVarsLinker::LoadExports_Async_LoadImports(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority)
 {
 	FLoadPackageAsyncDelegate LoadPackageAsyncDelegate;
 	FGuid CounterID;
 
 	CounterID = FGuid::NewGuid();
-	LoadPackageAsyncDelegate = FLoadPackageAsyncDelegate::CreateWeakLambda(this, [this, ExportIndexs, CounterID, CallBack](const FName&, UPackage*, EAsyncLoadingResult::Type Result)
+	LoadPackageAsyncDelegate = FLoadPackageAsyncDelegate::CreateWeakLambda(this, [this, Priority, ExportIndexs, CounterID, CallBack](const FName&, UPackage*, EAsyncLoadingResult::Type Result)
 		{
 			// GameThread
 
@@ -480,7 +491,7 @@ void UConfigVarsLinker::LoadExports_Async_LoadImports(TArray<int32> ExportIndexs
 
 			if (LoadingImportCounter[CounterID]-- == 1)
 			{
-				LoadExports_Async_LoadExports(ExportIndexs, CallBack);
+				LoadExports_Async_LoadExports(ExportIndexs, CallBack, Priority);
 			}
 		});
 
@@ -489,7 +500,7 @@ void UConfigVarsLinker::LoadExports_Async_LoadImports(TArray<int32> ExportIndexs
 	{
 		FConfigVarsExport& Export = ExportTable[ExportIndex];
 		// Class
-		if (LoadImport_Async(Export.ClassIndex, LoadPackageAsyncDelegate) != INDEX_NONE)
+		if (LoadImport_Async(Export.ClassIndex, LoadPackageAsyncDelegate, Priority) != INDEX_NONE)
 		{
 			++LoadNum;
 		}
@@ -499,7 +510,7 @@ void UConfigVarsLinker::LoadExports_Async_LoadImports(TArray<int32> ExportIndexs
 		for (FBitArray::FIterator It(Export.ImportSet); It; ++It)
 		{
 			int32 Index = *It;
-			if (LoadImport_Async(Index, LoadPackageAsyncDelegate) != INDEX_NONE)
+			if (LoadImport_Async(Index, LoadPackageAsyncDelegate, Priority) != INDEX_NONE)
 			{
 				++LoadNum;
 			}
@@ -509,14 +520,13 @@ void UConfigVarsLinker::LoadExports_Async_LoadImports(TArray<int32> ExportIndexs
 	LoadingImportCounter.Add(CounterID, LoadNum);
 }
 
-void UConfigVarsLinker::LoadExports_Async_LoadExports(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack)
+void UConfigVarsLinker::LoadExports_Async_LoadExports(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority)
 {
 	UPackage* Package = GetPackage();
 	this->ClearFlags(RF_NeedLoad | RF_WasLoaded | RF_LoadCompleted);
 	this->SetFlags(RF_Public | RF_NeedPostLoad | RF_NeedPostLoadSubobjects | RF_WillBeLoaded);
 
 	constexpr int32 PIEInstanceID = INDEX_NONE;
-	constexpr int32 Priority = INT32_MAX;
 
 	LoadPackageAsync(Package->GetLoadedPath(), Package->GetFName(), FLoadPackageAsyncDelegate::CreateWeakLambda(this, [this, ExportIndexs, CallBack](const FName&, UPackage*, EAsyncLoadingResult::Type Result) {
 		TArray<UConfigVarsData*> ExportObjs;
@@ -532,10 +542,6 @@ void UConfigVarsLinker::LoadExports_Async_LoadExports(TArray<int32> ExportIndexs
 		}
 
 		ExportObjs.Empty(ExportIndexs.Num());
-
-		UPackage* Package = GetPackage();
-		constexpr int32 PIEInstanceID = INDEX_NONE;
-		constexpr int32 Priority = INT32_MAX;
 
 		for (int32 Index : ExportIndexs)
 		{
@@ -591,7 +597,7 @@ UConfigVarsData* UConfigVarsLinker::LoadData(int32 ExportIndex)
 	return ConfigVarsData;
 }
 
-void UConfigVarsLinker::LoadData_Async(int32 ExportIndex, FLoadConfigVarsAsyncDelegate CallBack)
+void UConfigVarsLinker::LoadData_Async(int32 ExportIndex, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority)
 {
 	UConfigVarsData* ConfigVarsData = nullptr;
 
@@ -620,7 +626,7 @@ void UConfigVarsLinker::LoadData_Async(int32 ExportIndex, FLoadConfigVarsAsyncDe
 	/************************************************************************/
 	if (!ConfigVarsData && Export.ClassIndex != INDEX_NONE)
 	{
-		LoadExports_Async_Request({ ExportIndex }, CallBack);
+		LoadExports_Async_Request({ ExportIndex }, CallBack, Priority);
 	}
 }
 
@@ -683,12 +689,10 @@ UConfigVarsData* UConfigVarsLinker::LoadOrAddData(int32& InOutExportIndex, const
 					// 反序列化Object的数据
 					FLinkerLoad* LinkerLoad = CreateLinker_Sync();
 					check(LinkerLoad);
-					// FStructuredArchive::FRecord Record = FStructuredArchiveFromArchive(*LinkerLoad).GetSlot().EnterRecord();
-
+					
 					((FArchive*)LinkerLoad)->Seek(Export.SerialLocation);
-					FArchiveConfigVars ConfigVarsAr(*LinkerLoad, this, true, false);
 
-					ConfigVarsData->SerializeConfigVars(ConfigVarsAr, *LinkerLoad);
+					ConfigVarsData->SerializeConfigVars(FStructuredArchiveFromArchive(*LinkerLoad).GetSlot().EnterRecord(), this);
 				}
 				EndLoad(LoadContext);
 			}
@@ -741,11 +745,13 @@ void UConfigVarsLinker::RemoveData(int32 ExportIndex)
 
 //////////////////////////////////////////////////////////////////////////
 
-void UConfigVarsData::SerializeConfigVars(FArchiveConfigVars& ConfigVarsAr, FArchive& RealAr)
+void UConfigVarsData::SerializeConfigVars(FStructuredArchive::FRecord ExportRecord, UConfigVarsLinker* Linker)
 {
+	FStructuredArchive::FRecord RealRecord = ExportRecord.EnterField(*GetName()).EnterRecord();
+
 	for (UClass* DataClass = GetClass(); DataClass->IsChildOf(UConfigVarsData::StaticClass()); DataClass = DataClass->GetSuperClass())
 	{
-		Serialize_Internal(ConfigVarsAr, RealAr, DataClass, this);
+		SerializeProperties(RealRecord, Linker, DataClass, this);
 	}
 
 	// 仅作为静态数据存储Object而存在，不希望再走UObject的Serialize了。否则会被加入Export中。
@@ -753,267 +759,381 @@ void UConfigVarsData::SerializeConfigVars(FArchiveConfigVars& ConfigVarsAr, FArc
 }
 
 template<typename SrcType>
-void UConfigVarsData::Serialize_Internal(FArchiveConfigVars& ConfigVarsAr, FArchive& RealAr, const UStruct* DataStruct, SrcType* SrcData)
+void UConfigVarsData::SerializeProperties(FStructuredArchive::FRecord RealRecord, UConfigVarsLinker* Linker, const UStruct* DataStruct, SrcType* SrcData)
 {
-	FBitArray BitArray;
+	FArchive& UnderlyingArchive = RealRecord.GetUnderlyingArchive();
 
-#if WITH_EDITOR
-	if (ConfigVarsAr.IsSaving())
+	FStructuredArchive::FStream PropertiesStream = RealRecord.EnterStream(*DataStruct->GetName());
+
+	if (UnderlyingArchive.IsSaving())
 	{
-		int32 PropCount = 0;
+		int32 SerialPropCount = 0;
+		int32 InitialOffset = UnderlyingArchive.Tell();
+
+		UnderlyingArchive << SerialPropCount;
+
 		for (TFieldIterator<FProperty> PropertyIter(DataStruct); PropertyIter; ++PropertyIter)
 		{
-			++PropCount;
-		}
+			FProperty* ChildProperty = *PropertyIter;
 
-		BitArray = FBitArray(PropCount);
-
-		int32 PropIndex = 0;
-		for (TFieldIterator<FProperty> PropertyIter(DataStruct); PropertyIter; ++PropertyIter, ++PropIndex)
-		{
 			static const FName NAME_NoConfigVars = "NoConfigVars";
-			if ((*PropertyIter)->HasMetaData(NAME_NoConfigVars))
+			if (!ChildProperty)
 			{
-				BitArray.Add(PropIndex);
+				break;
+			}
+			if (ChildProperty->HasMetaData(NAME_NoConfigVars))
+			{
+				ChildProperty->SetPropertyFlags(EPropertyFlags::CPF_SkipSerialization);
+				ChildProperty = ChildProperty->PropertyLinkNext;
 				continue;
 			}
+
+			++SerialPropCount;
+
+			FStructuredArchive::FRecord PropertyRecord = PropertiesStream.EnterElement().EnterRecord();
+			FArchive& PropertyArchive = PropertyRecord.GetUnderlyingArchive();
+
+			int32 PropertySize = 0;
+			FSerialSizeScope Scope(PropertyArchive, PropertySize);
+
+			FName PropertyName = ChildProperty->GetFName();
+			FName PropertyType = ChildProperty->GetID();
+			PropertyRecord << SA_VALUE(TEXT("PropertyName"), PropertyName);
+			PropertyRecord << SA_VALUE(TEXT("PropertyType"), PropertyType);
+
+
+			// 开始序列化属性值
+			SerializeItem(PropertyRecord, ChildProperty, Linker, DataStruct, SrcData);
+		}
+
+		int32 FinalOffset = UnderlyingArchive.Tell();
+
+		UnderlyingArchive.Seek(InitialOffset);
+		UnderlyingArchive << SerialPropCount;
+		UnderlyingArchive.Seek(FinalOffset);
+	}
+	else if (UnderlyingArchive.IsLoading())
+	{
+		FProperty* ChildProperty = DataStruct->PropertyLink;
+
+		int32 SerialPropCount;
+		UnderlyingArchive << SerialPropCount;
+
+		for (; SerialPropCount; --SerialPropCount)
+		{
+			FStructuredArchive::FRecord PropertyRecord = PropertiesStream.EnterElement().EnterRecord();
+			FArchive& PropertyArchive = PropertyRecord.GetUnderlyingArchive();
+
+			int32 PropertySize = 0;
+			FSerialSizeScope Scope(PropertyArchive, PropertySize);
+
+			int32 InitialOffset = PropertyArchive.Tell();
+
+			FName PropertyName;
+			FName PropertyType;
+			PropertyRecord << SA_VALUE(TEXT("PropertyName"), PropertyName);
+			PropertyRecord << SA_VALUE(TEXT("PropertyType"), PropertyType);
+
+			// 处理属性乱序、丢失的情况
+			if (ChildProperty == nullptr || ChildProperty->GetFName() != PropertyName)
+			{
+				FProperty* CurrentProperty = ChildProperty;
+				// 向后续继续搜索
+				for (; ChildProperty; ChildProperty = ChildProperty->PropertyLinkNext)
+				{
+					if (ChildProperty->GetFName() == PropertyName)
+					{
+						break;
+					}
+				}
+				// 从头开始搜索
+				if (ChildProperty == nullptr)
+				{
+					for (ChildProperty = DataStruct->PropertyLink; ChildProperty && ChildProperty != CurrentProperty; ChildProperty = ChildProperty->PropertyLinkNext)
+					{
+						if (ChildProperty->GetFName() == PropertyName)
+						{
+							break;
+						}
+					}
+
+					if (ChildProperty == CurrentProperty)
+					{
+						ChildProperty = nullptr;
+					}
+				}
+
+				// 未能正常处理，尝试直接跳过
+				if (ChildProperty == nullptr)
+				{
+					PropertyArchive.Seek(InitialOffset + PropertySize);
+					continue;
+				}
+				else if (ChildProperty->GetID() != PropertyType)
+				{
+					UE_LOG(LogConfigVarsLinker, Warning, TEXT("Type mismatch in %s of %s - Previous (%s) Current(%s) for package:  %s"), *PropertyName.ToString(), *DataStruct->GetName(), *PropertyType.ToString(), *ChildProperty->GetID().ToString());
+
+					PropertyArchive.Seek(InitialOffset + PropertySize);
+					continue;
+				}
+
+			}
+
+
+			// 开始反序列化属性值
+			SerializeItem(PropertyRecord, ChildProperty, Linker, DataStruct, SrcData);
+
+
+			ChildProperty = ChildProperty->PropertyLinkNext;
+		}
+
+
+	}
+}
+
+template<typename SrcType>
+void UConfigVarsData::SerializeItem(FStructuredArchive::FRecord PropertyRecord, FProperty* ChildProperty, UConfigVarsLinker* Linker, const UStruct* DataStruct, SrcType* SrcData)
+{
+	FArchive& PropertyArchive = PropertyRecord.GetUnderlyingArchive();
+
+	if (FObjectProperty* ObjectProperty = CastField<FObjectProperty>(ChildProperty))
+	{
+		if (PropertyArchive.IsSaving())
+		{
+			UObject* ObjectValue = ObjectProperty->GetObjectPropertyValue((uint8*)SrcData + ChildProperty->GetOffset_ForInternal());
+			if (!IsValid(ObjectValue))
+			{
+				ObjectValue = nullptr;
+			}
+
+			FConfigVarsUtils::SerializeObject(PropertyRecord, Linker, ObjectValue);
+		}
+		else if (PropertyArchive.IsLoading())
+		{
+			UObject* ObjectValue = nullptr;
+			FConfigVarsUtils::SerializeObject(PropertyRecord, Linker, ObjectValue);
+
+			ObjectProperty->SetObjectPropertyValue((uint8*)SrcData + ChildProperty->GetOffset_ForInternal(), ObjectValue);
 		}
 	}
-#endif
-
-	ConfigVarsAr << BitArray;
-
-	int32 PropIndex = 0;
-	for (TFieldIterator<FProperty> PropertyIter(DataStruct); PropertyIter; ++PropertyIter, ++PropIndex)
+	else if (FStructProperty* StructProperty = CastField<FStructProperty>(ChildProperty))
 	{
-		FProperty* ChildProperty = *PropertyIter;
-
-		if (BitArray[PropIndex])
+		SerializeProperties(PropertyRecord, Linker, StructProperty->Struct, (uint8*)SrcData + ChildProperty->GetOffset_ForInternal());
+	}
+	else if (FArrayProperty* ArrayProperty = CastField<FArrayProperty>(ChildProperty))
+	{
+		if (FObjectProperty* ItemObjectProperty = CastField<FObjectProperty>(ArrayProperty->Inner))
 		{
-			continue;
+			FScriptArrayHelper ArrayHelper(ArrayProperty, ArrayProperty->ContainerPtrToValuePtr<void>(SrcData));
+
+			if (PropertyArchive.IsSaving())
+			{
+				int32 Num = ArrayHelper.Num();
+				PropertyRecord << SA_VALUE(TEXT("ArrayNum"), Num);
+
+				for (int32 Index = 0; Index < Num; ++Index)
+				{
+					UObject* ObjectValue = ItemObjectProperty->GetObjectPropertyValue(ArrayHelper.GetRawPtr(Index));
+					if (!IsValid(ObjectValue))
+					{
+						ObjectValue = nullptr;
+					}
+
+					FConfigVarsUtils::SerializeObject(PropertyRecord, Linker, ObjectValue);
+				}
+			}
+			else if (PropertyArchive.IsLoading())
+			{
+				int32 Num = 0;
+				PropertyRecord << SA_VALUE(TEXT("ArrayNum"), Num);
+				ArrayHelper.EmptyValues(Num);
+
+				for (; Num; --Num)
+				{
+					UObject* ObjectValue = nullptr;
+					FConfigVarsUtils::SerializeObject(PropertyRecord, Linker, ObjectValue);
+
+					int32 Index = ArrayHelper.AddUninitializedValue();
+					ItemObjectProperty->SetObjectPropertyValue(ArrayHelper.GetRawPtr(Index), ObjectValue);
+				}
+			}
 		}
 		else
 		{
-			ChildProperty->SetPropertyFlags(EPropertyFlags::CPF_SkipSerialization);
+			ArrayProperty->SerializeItem(FStructuredArchiveFromArchive(PropertyArchive).GetSlot(), (uint8*)SrcData + ChildProperty->GetOffset_ForInternal(), nullptr);
 		}
-
-		if (FObjectProperty* ObjectProperty = CastField<FObjectProperty>(ChildProperty))
+	}
+	else if (FMapProperty* MapProperty = CastField<FMapProperty>(ChildProperty))
+	{
+		FProperty* KeyProperty = MapProperty->KeyProp;
+		FProperty* ValueProperty = MapProperty->ValueProp;
+		FObjectProperty* KeyObjectProperty = CastField<FObjectProperty>(MapProperty->KeyProp);
+		FObjectProperty* ValueObjectProperty = CastField<FObjectProperty>(MapProperty->ValueProp);
+		if (KeyObjectProperty || ValueObjectProperty)
 		{
-			if (ConfigVarsAr.IsSaving())
+			FScriptMapHelper MapHelper(MapProperty, MapProperty->ContainerPtrToValuePtr<void>(SrcData));
+
+			if (PropertyArchive.IsSaving())
 			{
-				UObject* ObjectValue = ObjectProperty->GetObjectPropertyValue((uint8*)SrcData + ChildProperty->GetOffset_ForInternal());
-				if (!IsValid(ObjectValue))
+				int32 Num = MapHelper.Num();
+				FStructuredArchive::FArray EntriesArray = PropertyRecord.EnterArray(TEXT("Entries"), Num);
+
+				// Map 是稀疏数组，必须判断Index有效性
+				for (int32 Index = 0; Num; ++Index)
 				{
-					ObjectValue = nullptr;
-				}
-
-				ConfigVarsAr << ObjectValue;
-			}
-			else if (ConfigVarsAr.IsLoading())
-			{
-				UObject* ObjectValue = nullptr;
-				ConfigVarsAr << ObjectValue;
-
-				ObjectProperty->SetObjectPropertyValue((uint8*)SrcData + ChildProperty->GetOffset_ForInternal(), ObjectValue);
-			}
-		}
-		else if (FStructProperty* StructProperty = CastField<FStructProperty>(ChildProperty))
-		{
-			Serialize_Internal(ConfigVarsAr, RealAr, StructProperty->Struct, (uint8*)SrcData + ChildProperty->GetOffset_ForInternal());
-		}
-		else if (FArrayProperty* ArrayProperty = CastField<FArrayProperty>(ChildProperty))
-		{
-			if (FObjectProperty* ItemObjectProperty = CastField<FObjectProperty>(ArrayProperty->Inner))
-			{
-				FScriptArrayHelper ArrayHelper(ArrayProperty, ArrayProperty->ContainerPtrToValuePtr<void>(SrcData));
-
-				if (ConfigVarsAr.IsSaving())
-				{
-					int32 Num = ArrayHelper.Num();
-					ConfigVarsAr << Num;
-					for (int32 Index = 0; Index < Num; ++Index)
+					if (MapHelper.IsValidIndex(Index))
 					{
-						UObject* ObjectValue = ItemObjectProperty->GetObjectPropertyValue(ArrayHelper.GetRawPtr(Index));
-						if (!IsValid(ObjectValue))
-						{
-							ObjectValue = nullptr;
-						}
+						FStructuredArchive::FRecord EntryRecord = EntriesArray.EnterElement().EnterRecord();
 
-						ConfigVarsAr << ObjectValue;
-					}
-				}
-				else if (ConfigVarsAr.IsLoading())
-				{
-					int32 Num = 0;
-					ConfigVarsAr << Num;
-					ArrayHelper.EmptyValues(Num);
-
-					for (; Num; --Num)
-					{
-						UObject* ObjectValue = nullptr;
-						ConfigVarsAr << ObjectValue;
-
-						int32 Index = ArrayHelper.AddUninitializedValue();
-						ItemObjectProperty->SetObjectPropertyValue(ArrayHelper.GetRawPtr(Index), ObjectValue);
-					}
-				}
-			}
-			else
-			{
-				ArrayProperty->SerializeItem(FStructuredArchiveFromArchive(RealAr).GetSlot(), (uint8*)SrcData + ChildProperty->GetOffset_ForInternal(), nullptr);
-			}
-		}
-		else if (FMapProperty* MapProperty = CastField<FMapProperty>(ChildProperty))
-		{
-			FObjectProperty* KeyObjectProperty = CastField<FObjectProperty>(MapProperty->KeyProp);
-			FObjectProperty* ValueObjectProperty = CastField<FObjectProperty>(MapProperty->ValueProp);
-			if (KeyObjectProperty || ValueObjectProperty)
-			{
-				FScriptMapHelper MapHelper(MapProperty, MapProperty->ContainerPtrToValuePtr<void>(SrcData));
-
-				if (ConfigVarsAr.IsSaving())
-				{
-					int32 Num = MapHelper.Num();
-					ConfigVarsAr << Num;
-
-					for (int32 MapSparseIndex = 0; MapSparseIndex < MapHelper.GetMaxIndex(); ++MapSparseIndex)
-					{
-						// Map 是稀疏数组，必须判断Index有效性
-						if (MapHelper.IsValidIndex(MapSparseIndex))
-						{
-							uint8* MapKeyData = MapHelper.GetKeyPtr(MapSparseIndex);
-							uint8* MapValueData = MapHelper.GetValuePtr(MapSparseIndex);
-
-							if (KeyObjectProperty)
-							{
-								UObject* ObjectValue = KeyObjectProperty->GetObjectPropertyValue(MapKeyData);
-								if (!IsValid(ObjectValue))
-								{
-									ObjectValue = nullptr;
-								}
-
-								ConfigVarsAr << ObjectValue;
-							}
-							else
-							{
-								/*MapProperty->KeyProp->SerializeItem(Record.EnterField(TEXT("Key")), MapKeyData);*/
-								MapProperty->KeyProp->SerializeItem(FStructuredArchiveFromArchive(RealAr).GetSlot(), MapKeyData);
-							}
-
-							if (ValueObjectProperty)
-							{
-								UObject* ObjectValue = ValueObjectProperty->GetObjectPropertyValue(MapValueData);
-								if (!IsValid(ObjectValue))
-								{
-									ObjectValue = nullptr;
-								}
-
-								ConfigVarsAr << ObjectValue;
-							}
-							else
-							{
-								/*MapProperty->ValueProp->SerializeItem(Record.EnterField(TEXT("Value")), MapValueData);*/
-								MapProperty->ValueProp->SerializeItem(FStructuredArchiveFromArchive(RealAr).GetSlot(), MapValueData);
-							}
-						}
-					}
-				}
-				else if (ConfigVarsAr.IsLoading())
-				{
-					int32 Num = 0;
-					ConfigVarsAr << Num;
-					MapHelper.EmptyValues(Num);
-
-					for (; Num; --Num)
-					{
-						int32 Index = MapHelper.AddDefaultValue_Invalid_NeedsRehash();
 						uint8* MapKeyData = MapHelper.GetKeyPtr(Index);
 						uint8* MapValueData = MapHelper.GetValuePtr(Index);
 
 						if (KeyObjectProperty)
 						{
-							UObject* ObjectValue = nullptr;
-							ConfigVarsAr << ObjectValue;
-
-							KeyObjectProperty->SetObjectPropertyValue(MapKeyData, ObjectValue);
-						}
-						else
-						{
-							/*MapProperty->KeyProp->SerializeItem(Record.EnterField(TEXT("Key")), MapKeyData);*/
-							MapProperty->KeyProp->SerializeItem(FStructuredArchiveFromArchive(RealAr).GetSlot(), MapKeyData);
-						}
-
-						if (ValueObjectProperty)
-						{
-							UObject* ObjectValue = nullptr;
-							ConfigVarsAr << ObjectValue;
-
-							ValueObjectProperty->SetObjectPropertyValue(MapValueData, ObjectValue);
-						}
-						else
-						{
-							/*MapProperty->ValueProp->SerializeItem(Record.EnterField(TEXT("Value")), MapValueData);*/
-							MapProperty->ValueProp->SerializeItem(FStructuredArchiveFromArchive(RealAr).GetSlot(), MapValueData);
-						}
-					}
-				}
-			}
-			else
-			{
-				MapProperty->SerializeItem(FStructuredArchiveFromArchive(RealAr).GetSlot(), (uint8*)SrcData + ChildProperty->GetOffset_ForInternal(), nullptr);
-			}
-		}
-		else if (FSetProperty* SetProperty = CastField<FSetProperty>(ChildProperty))
-		{
-			if (FObjectProperty* ItemObjectProperty = CastField<FObjectProperty>(SetProperty->ElementProp))
-			{
-				FScriptSetHelper SetHelper(SetProperty, SetProperty->ContainerPtrToValuePtr<void>(SrcData));
-
-				if (ConfigVarsAr.IsSaving())
-				{
-					int32 Num = SetHelper.Num();
-					ConfigVarsAr << Num;
-					for (int32 SetSparseIndex = 0; SetSparseIndex < SetHelper.GetMaxIndex(); ++SetSparseIndex)
-					{
-						// Set 是稀疏数组，必须判断Index有效性
-						if (SetHelper.IsValidIndex(SetSparseIndex))
-						{
-							UObject* ObjectValue = ItemObjectProperty->GetObjectPropertyValue(SetHelper.GetElementPtr(SetSparseIndex));
+							UObject* ObjectValue = KeyObjectProperty->GetObjectPropertyValue(MapKeyData);
 							if (!IsValid(ObjectValue))
 							{
 								ObjectValue = nullptr;
 							}
 
-							ConfigVarsAr << ObjectValue;
+							FConfigVarsUtils::SerializeObject(PropertyRecord, Linker, ObjectValue);
 						}
-					}
-				}
-				else if (ConfigVarsAr.IsLoading())
-				{
-					int32 Num = 0;
-					ConfigVarsAr << Num;
-					SetHelper.EmptyElements(Num);
+						else
+						{
+							FSerializedPropertyScope SerializedProperty(PropertyArchive, KeyProperty, MapProperty);
+							KeyProperty->SerializeItem(EntryRecord.EnterField(TEXT("Key")), MapKeyData, nullptr);
+						}
 
-					for (; Num; --Num)
-					{
-						UObject* ObjectValue = nullptr;
-						ConfigVarsAr << ObjectValue;
+						if (ValueObjectProperty)
+						{
+							UObject* ObjectValue = ValueObjectProperty->GetObjectPropertyValue(MapValueData);
+							if (!IsValid(ObjectValue))
+							{
+								ObjectValue = nullptr;
+							}
 
-						int32 Index = SetHelper.AddDefaultValue_Invalid_NeedsRehash();
-						ItemObjectProperty->SetObjectPropertyValue(SetHelper.GetElementPtr(Index), ObjectValue);
+							FConfigVarsUtils::SerializeObject(PropertyRecord, Linker, ObjectValue);
+						}
+						else
+						{
+							FSerializedPropertyScope SerializedProperty(PropertyArchive, ValueProperty, MapProperty);
+							ValueProperty->SerializeItem(EntryRecord.EnterField(TEXT("Value")), MapValueData, nullptr);
+						}
+
+						--Num;
 					}
 				}
 			}
-			else
+			else if (PropertyArchive.IsLoading())
 			{
-				SetProperty->SerializeItem(FStructuredArchiveFromArchive(RealAr).GetSlot(), (uint8*)SrcData + ChildProperty->GetOffset_ForInternal(), nullptr);
+				int32 Num = 0;
+				FStructuredArchive::FArray EntriesArray = PropertyRecord.EnterArray(TEXT("Entries"), Num);
+
+				MapHelper.EmptyValues(Num);
+				for (; Num; --Num)
+				{
+					FStructuredArchive::FRecord EntryRecord = EntriesArray.EnterElement().EnterRecord();
+					int32 Index = MapHelper.AddDefaultValue_Invalid_NeedsRehash();
+					uint8* MapKeyData = MapHelper.GetKeyPtr(Index);
+					uint8* MapValueData = MapHelper.GetValuePtr(Index);
+
+					if (KeyObjectProperty)
+					{
+						UObject* ObjectValue = nullptr;
+						FConfigVarsUtils::SerializeObject(PropertyRecord, Linker, ObjectValue);
+
+						KeyObjectProperty->SetObjectPropertyValue(MapKeyData, ObjectValue);
+					}
+					else
+					{
+						FSerializedPropertyScope SerializedProperty(PropertyArchive, KeyProperty, MapProperty);
+						KeyProperty->SerializeItem(EntryRecord.EnterField(TEXT("Key")), MapKeyData, nullptr);
+					}
+
+
+					if (ValueObjectProperty)
+					{
+						UObject* ObjectValue = nullptr;
+						FConfigVarsUtils::SerializeObject(PropertyRecord, Linker, ObjectValue);
+
+						ValueObjectProperty->SetObjectPropertyValue(MapValueData, ObjectValue);
+					}
+					else
+					{
+						FSerializedPropertyScope SerializedProperty(PropertyArchive, ValueProperty, MapProperty);
+						ValueProperty->SerializeItem(EntryRecord.EnterField(TEXT("Value")), MapValueData, nullptr);
+					}
+				}
+
+				MapHelper.Rehash();
 			}
 		}
 		else
 		{
-			//TStringBuilder<256> TagName;
-			//TagName = ChildProperty->GetName();
-			ChildProperty->SerializeItem(FStructuredArchiveFromArchive(RealAr).GetSlot(), (uint8*)SrcData + ChildProperty->GetOffset_ForInternal());
+			MapProperty->SerializeItem(FStructuredArchiveFromArchive(PropertyArchive).GetSlot(), (uint8*)SrcData + ChildProperty->GetOffset_ForInternal(), nullptr);
 		}
+	}
+	else if (FSetProperty* SetProperty = CastField<FSetProperty>(ChildProperty))
+	{
+		if (FObjectProperty* ItemObjectProperty = CastField<FObjectProperty>(SetProperty->ElementProp))
+		{
+			FScriptSetHelper SetHelper(SetProperty, SetProperty->ContainerPtrToValuePtr<void>(SrcData));
+
+			if (PropertyArchive.IsSaving())
+			{
+				// 这里用Num而不是MaxIndex，可以减少遍历数量
+				int32 Num = SetHelper.Num();
+				FStructuredArchive::FArray ElementsArray = PropertyRecord.EnterArray(TEXT("Elements"), Num);
+
+				FSerializedPropertyScope SerializedProperty(PropertyArchive, ItemObjectProperty, SetProperty);
+
+				// Set 是稀疏数组，必须判断Index有效性
+				for (int32 Index = 0; Num; ++Index)
+				{
+					if (SetHelper.IsValidIndex(Index))
+					{
+						UObject* ObjectValue = ItemObjectProperty->GetObjectPropertyValue(SetHelper.GetElementPtr(Index));
+
+						if (!IsValid(ObjectValue))
+						{
+							ObjectValue = nullptr;
+						}
+
+						FConfigVarsUtils::SerializeObject(PropertyRecord, Linker, ObjectValue);
+
+						--Num;
+					}
+				}
+
+				SetHelper.Rehash();
+
+			}
+			else if (PropertyArchive.IsLoading())
+			{
+				int32 Num = 0;
+				FStructuredArchive::FArray ElementsArray = PropertyRecord.EnterArray(TEXT("Elements"), Num);
+				FSerializedPropertyScope SerializedProperty(PropertyArchive, ItemObjectProperty, SetProperty);
+
+				SetHelper.EmptyElements(Num);
+
+				for (; Num; --Num)
+				{
+					UObject* ObjectValue = nullptr;
+					FConfigVarsUtils::SerializeObject(PropertyRecord, Linker, ObjectValue);
+
+					int32 Index = SetHelper.AddDefaultValue_Invalid_NeedsRehash();
+					ItemObjectProperty->SetObjectPropertyValue(SetHelper.GetElementPtr(Index), ObjectValue);
+				}
+			}
+		}
+		else
+		{
+			SetProperty->SerializeItem(FStructuredArchiveFromArchive(PropertyArchive).GetSlot(), (uint8*)SrcData + ChildProperty->GetOffset_ForInternal(), nullptr);
+		}
+	}
+	else
+	{
+		FSerializedPropertyScope SerializedProperty(PropertyArchive, ChildProperty);
+		ChildProperty->SerializeItem(FStructuredArchiveFromArchive(PropertyArchive).GetSlot(), (uint8*)SrcData + ChildProperty->GetOffset_ForInternal());
 	}
 }

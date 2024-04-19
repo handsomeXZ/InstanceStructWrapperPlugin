@@ -14,9 +14,9 @@ const UConfigVarsData* UConfigVarsBagReader::LoadData(UObject* Outer, FConfigVar
 	return ConfigVarsBag.LoadData(Outer);
 }
 
-void UConfigVarsBagReader::LoadData_Async(UObject* Outer, FConfigVarsBag ConfigVarsBag, FOnConfigVarsAsyncCallBack CallBack)
+void UConfigVarsBagReader::LoadData_Async(UObject* Outer, FConfigVarsBag ConfigVarsBag, FOnConfigVarsAsyncCallBack CallBack, int32 Priority)
 {
-	ConfigVarsBag.LoadData_Async(Outer, CallBack);
+	ConfigVarsBag.LoadData_Async(Outer, CallBack, Priority);
 }
 
 FConfigVarsBag::~FConfigVarsBag()
@@ -95,7 +95,7 @@ const UConfigVarsData* FConfigVarsBag::LoadData(UObject* Outer)
 
 }
 
-void FConfigVarsBag::LoadData_Async(UObject* Outer, FOnConfigVarsAsyncCallBack CallBack)
+void FConfigVarsBag::LoadData_Async(UObject* Outer, FOnConfigVarsAsyncCallBack CallBack, int32 Priority)
 {
 	UConfigVarsData* ConfigVarsData = nullptr;
 
@@ -138,7 +138,8 @@ void FConfigVarsBag::LoadData_Async(UObject* Outer, FOnConfigVarsAsyncCallBack C
 			}
 #endif
 			CallBack.ExecuteIfBound(OutObjects);
-		}));
+		})
+		, Priority);
 	}
 }
 
