@@ -67,7 +67,7 @@
 * ![示例7](image/Image_7.png)
 
 * * *
-## 数据懒加载框架
+## 数据懒加载框架-ConfigVars
 ### 介绍
 * 直译为：配置变量。
 * **完美支持**UE的三套资源加载机制：**非EDL**（Editor），**EDL**（Runtime）和**ZenLoader**（Runtime需要分Chunk）
