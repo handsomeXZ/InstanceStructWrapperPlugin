@@ -754,6 +754,8 @@ void UConfigVarsData::SerializeConfigVars(FStructuredArchive::FRecord ExportReco
 		SerializeProperties(RealRecord, Linker, DataClass, this);
 	}
 
+
+	SerializeNoConfigVars(ExportRecord, Linker);
 	// 仅作为静态数据存储Object而存在，不希望再走UObject的Serialize了。否则会被加入Export中。
 	//Super::Serialize(Record);
 }
@@ -781,9 +783,8 @@ void UConfigVarsData::SerializeProperties(FStructuredArchive::FRecord RealRecord
 			{
 				break;
 			}
-			if (ChildProperty->HasMetaData(NAME_NoConfigVars))
+			if (ChildProperty->HasMetaData(NAME_NoConfigVars) || !ChildProperty->ShouldSerializeValue(UnderlyingArchive))
 			{
-				ChildProperty->SetPropertyFlags(EPropertyFlags::CPF_SkipSerialization);
 				ChildProperty = ChildProperty->PropertyLinkNext;
 				continue;
 			}

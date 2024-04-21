@@ -103,5 +103,5 @@
 ## 待优化
 * 目前InstancedStructContainer的编辑器支持方案不是很合理，在数据变化时，都会重新构建InstancedStructContainer，存在不必要的开销。
 * （富文本拓展）修复文本内容偏移后，剪裁位置没有跟随改变的问题。
-* ConfigVars需要开放自定义序列化。
 * ConfigVars在设计上应该只适合静态数据，但现在也可以被动态修改，这还是我设计的本意吗？
+* ConfigVars的自定义Import依赖链需要优化。

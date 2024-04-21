@@ -151,7 +151,7 @@ public:
 	virtual void Serialize(FStructuredArchive::FRecord Record) override final {}
 
 	virtual void SerializeConfigVars(FStructuredArchive::FRecord ExportRecord, UConfigVarsLinker* Linker);
-
+	virtual void SerializeNoConfigVars(FStructuredArchive::FRecord ExportRecord, UConfigVarsLinker* Linker) {}
 private:
 	template<typename SrcType>
 	void SerializeProperties(FStructuredArchive::FRecord ExportRecord, UConfigVarsLinker* Linker, const UStruct* DataStruct, SrcType* SrcData);
