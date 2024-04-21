@@ -6,7 +6,7 @@
   - [支持FInstancedStructWrapper的Widget和Extension自定义](#支持FInstancedStructWrapper的Widget和Extension自定义)
 - [项目示例](#项目示例)
   - [自定义样式组合规则的富文本Decorator](#自定义样式组合规则的富文本Decorator)
-- [数据懒加载框架](#数据懒加载框架)
+- [数据懒加载框架 ConfigVars](#数据懒加载框架 ConfigVars)
   - [介绍](#介绍)
   - [配置方式](#配置方式)
   - [静态数据类型配置](#静态数据类型配置)
@@ -67,7 +67,7 @@
 * ![示例7](image/Image_7.png)
 
 * * *
-## 数据懒加载框架-ConfigVars
+## 数据懒加载框架 ConfigVars
 ### 介绍
 * 直译为：配置变量。
 * **完美支持**UE的三套资源加载机制：**非EDL**（Editor），**EDL**（Runtime）和**ZenLoader**（Runtime需要分Chunk）
