@@ -95,6 +95,13 @@ public:
 		}
 
 	}
+	static void SerializeConfigVars(FStructuredArchive::FRecord ExportRecord, UConfigVarsLinker* Linker, FStructView ConfigVarsData);
+
+	template<typename SrcType>
+	static void SerializeProperties(FStructuredArchive::FRecord ExportRecord, UConfigVarsLinker* Linker, const UStruct* DataStruct, SrcType* SrcData);
+
+	template<typename SrcType>
+	static void SerializeItem(FStructuredArchive::FRecord PropertyRecord, FProperty* ChildProperty, UConfigVarsLinker* Linker, const UStruct* DataStruct, SrcType* SrcData);
 };
 
 FArchive& operator<<(FArchive& Ar, FConfigVarsImport& Import)
@@ -105,7 +112,6 @@ FArchive& operator<<(FArchive& Ar, FConfigVarsImport& Import)
 
 FArchive& operator<<(FArchive& Ar, FConfigVarsExport& Export)
 {
-	Ar << Export.ObjectName;
 	Ar << Export.SerialLocation;
 	Ar << Export.ClassIndex;
 	Ar << Export.ImportSet;
@@ -164,7 +170,7 @@ void UConfigVarsLinker::SerializeHeadData(FStructuredArchive::FRecord Record)
 		ImportTable.Empty();
 		ExportTable.Empty();
 
-		int32 ExportObjectsNum = ExportObjects.Num();
+		int32 ExportObjectsNum = ExportData.Num();
 		Ar << ExportObjectsNum;
 
 		int32 InitialLocation = Ar.Tell();
@@ -176,7 +182,10 @@ void UConfigVarsLinker::SerializeHeadData(FStructuredArchive::FRecord Record)
 		Ar << ExportObjectsNum;
 
 		// 常规反序列化流程
-		ExportObjects.SetNum(ExportObjectsNum);
+		{
+			FScopeLock ScopeLock(&ExportDataCritical);
+			ExportData.SetNum(ExportObjectsNum);
+		}
 
 		int32 InitialLocation = 0;
 		Ar << InitialLocation;
@@ -192,11 +201,12 @@ void UConfigVarsLinker::SerializeExportData(FStructuredArchive::FRecord Record)
 		int32 ExportDataSize = 0;
 		FSerialSizeScope Scope(Ar, ExportDataSize);	// ExportDataSize
 
-		for (UConfigVarsData* ExportObj : ExportObjects)
+		FScopeLock ScopeLock(&ExportDataCritical);
+		for (FInstancedStruct& Data : ExportData)
 		{
-			if (IsValid(ExportObj))
+			if (Data.IsValid())
 			{
-				ExportObject(Record, ExportObj);
+				ExportStruct(Record, Data);
 			}
 		}
 	}
@@ -236,8 +246,11 @@ void UConfigVarsLinker::ProcessPendingLoadExports(FStructuredArchive::FRecord Re
 {
 	FArchive& Ar = Record.GetUnderlyingArchive();
 
-	int32 ExportObjectsNum = ExportObjects.Num();
-	Ar << ExportObjectsNum;
+	{
+		FScopeLock ScopeLock(&ExportDataCritical);
+		int32 ExportObjectsNum = ExportData.Num();
+		Ar << ExportObjectsNum;
+	}
 
 	// 计算序列化地址偏移
 	int32 RealLoaderLocation = Ar.Tell();
@@ -265,20 +278,25 @@ void UConfigVarsLinker::ProcessPendingLoadExports(FStructuredArchive::FRecord Re
 		FConfigVarsExport& Export = ExportTable[ExportIndex];
 		FConfigVarsImport& Import = ImportTable[Export.ClassIndex];
 
-		if (UObject* ExistingObject = FindObjectFast<UObject>(this, Export.ObjectName))
 		{
-			continue;
+			FScopeLock ScopeLock(&ExportDataCritical);
+			if (ExportData[ExportIndex].IsValid())
+			{
+				continue;
+			}
 		}
 
-		UClass* ExportClass = ((FSoftClassPath&)(Import.ObjectPath)).ResolveClass();
-		if (ExportClass)
+		UScriptStruct* ExportStruct = Cast<UScriptStruct>(Import.ObjectPath.ResolveObject());
+		if (ExportStruct)
 		{
-			UConfigVarsData* NewObj = NewObject<UConfigVarsData>(this, ExportClass, Export.ObjectName);
+			FLoadedConfigVarsData* NewData = new FLoadedConfigVarsData(ExportIndex, ExportStruct);
 
 			// 反序列化Object的数据
 			Ar.Seek(Export.SerialLocation - SerializeHeadOffset);
 
-			NewObj->SerializeConfigVars(Record, this);
+			FConfigVarsUtils::SerializeConfigVars(Record, this, NewData->Data);
+
+			LoadedConfigVarsDatas_Async.Push(NewData);
 		}
 	}
 
@@ -311,7 +329,7 @@ int32 UConfigVarsLinker::ImportObject(class UObject* ImportObj)
 	return ImportTable.Num() - 1;
 }
 
-void UConfigVarsLinker::ExportObject(FStructuredArchive::FRecord Record, class UConfigVarsData* ExportObj)
+void UConfigVarsLinker::ExportStruct(FStructuredArchive::FRecord Record, FStructView StructData)
 {
 	FArchive& Ar = Record.GetUnderlyingArchive();
 
@@ -319,13 +337,12 @@ void UConfigVarsLinker::ExportObject(FStructuredArchive::FRecord Record, class U
 
 	int32 InitialOffset = Ar.Tell();
 	{
-		ExportObj->SerializeConfigVars(Record, this);
+		FConfigVarsUtils::SerializeConfigVars(Record, this, StructData);
 	}
 
 	int32 FinalImportNum = ImportTable.Num();
 
 	FConfigVarsExport& Export = ExportTable.AddDefaulted_GetRef();
-	Export.ObjectName = ExportObj->GetFName();
 	Export.SerialLocation = InitialOffset;
 	Export.ClassIndex = ImportTable.Num();
 
@@ -335,7 +352,7 @@ void UConfigVarsLinker::ExportObject(FStructuredArchive::FRecord Record, class U
 		Export.ImportSet.AddRange(InitialImportNum, FinalImportNum - 1);
 	}
 
-	ImportTable.Emplace(ExportObj->GetClass());
+	ImportTable.Emplace(StructData.GetScriptStruct());
 
 }
 
@@ -345,7 +362,14 @@ void UConfigVarsLinker::VerifyAllExportLoaded()
 	for (int32 Index = 0; Index < ExportTable.Num(); ++Index)
 	{
 		// 注意：已经加载过的对象可能已经过时了，需要结合ClassIndex来判断。
-		if (!ExportObjects[Index] && ExportTable[Index].ClassIndex != INDEX_NONE)
+
+		bool bExportDataValid = false;
+		{
+			FScopeLock ScopeLock(&ExportDataCritical);
+			bExportDataValid = ExportData[Index].IsValid();
+		}
+
+		if (!bExportDataValid && ExportTable[Index].ClassIndex != INDEX_NONE)
 		{
 #if WITH_EDITOR
 			LoadOrAddData(Index, nullptr);
@@ -416,7 +440,7 @@ void UConfigVarsLinker::PushToPendingLoadExports(const TArray<int32>& ExportInde
 	}
 }
 
-void UConfigVarsLinker::LoadExports_Sync(TArray<int32> ExportIndexs, TArray<UConfigVarsData*>& ExportObjs)
+void UConfigVarsLinker::LoadExports_Sync(TArray<int32> ExportIndexs, TArray<FStructView>& OutExportData)
 {
 	if (ExportIndexs.IsEmpty())
 	{
@@ -430,8 +454,14 @@ void UConfigVarsLinker::LoadExports_Sync(TArray<int32> ExportIndexs, TArray<UCon
 
 	UPackage* Package = GetPackage();
 
+	EObjectFlags ReLoadFlags = RF_Public | RF_NeedPostLoad | RF_NeedPostLoadSubobjects | RF_WillBeLoaded;
+
+#if WITH_EDITOR
+	ReLoadFlags |= RF_NeedLoad;
+#endif
+
 	this->ClearFlags(RF_NeedLoad | RF_WasLoaded | RF_LoadCompleted);
-	this->SetFlags(RF_Public | RF_NeedPostLoad | RF_NeedPostLoadSubobjects | RF_WillBeLoaded);
+	this->SetFlags(ReLoadFlags);
 
 	int32 AsyncLoadRequestID = LoadPackageAsync(Package->GetLoadedPath(), Package->GetFName(), FLoadPackageAsyncDelegate(), PKG_None, PIEInstanceID, Priority, nullptr, LOAD_NoVerify);
 
@@ -443,10 +473,21 @@ void UConfigVarsLinker::LoadExports_Sync(TArray<int32> ExportIndexs, TArray<UCon
 	this->ClearFlags(RF_NeedLoad | RF_NeedPostLoad | RF_NeedPostLoadSubobjects | RF_WillBeLoaded);
 	this->SetFlags(RF_Public | RF_WasLoaded | RF_LoadCompleted);
 
+	{
+		TArray<FLoadedConfigVarsData*> LoadedConfigVarsDatas;
+		LoadedConfigVarsDatas_Async.PopAll(LoadedConfigVarsDatas);
+
+		FScopeLock ScopeLock(&ExportDataCritical);
+		for (FLoadedConfigVarsData* LoadedData : LoadedConfigVarsDatas)
+		{
+			ExportData[LoadedData->ExportIndex] = MoveTemp(LoadedData->Data);
+			delete LoadedData;
+		}
+	}
+
 	for (int32 Index : ExportIndexs)
 	{
-		UConfigVarsData* ExistingObject = FindObjectFast<UConfigVarsData>(this, ExportTable[Index].ObjectName);
-		ExportObjs.Add(ExistingObject);
+		OutExportData.Add(ExportData[Index]);
 	}
 }
 
@@ -454,8 +495,8 @@ void UConfigVarsLinker::LoadExports_Async_Request(TArray<int32> ExportIndexs, FL
 {
 	if (ExportIndexs.IsEmpty())
 	{
-		TArray<UConfigVarsData*> NullObjs;
-		CallBack.ExecuteIfBound(NullObjs);
+		TArray<FStructView> NullData;
+		CallBack.ExecuteIfBound(NullData);
 		return;
 	}
 
@@ -478,8 +519,8 @@ void UConfigVarsLinker::LoadExports_Async_LoadImports(TArray<int32> ExportIndexs
 			{
 				// 依赖加载失败
 				LoadingImportCounter.Remove(CounterID);
-				TArray<UConfigVarsData*> NullObjs;
-				CallBack.ExecuteIfBound(NullObjs);
+				TArray<FStructView> NullData;
+				CallBack.ExecuteIfBound(NullData);
 				return;
 			}
 
@@ -517,19 +558,31 @@ void UConfigVarsLinker::LoadExports_Async_LoadImports(TArray<int32> ExportIndexs
 		}
 	}
 
-	LoadingImportCounter.Add(CounterID, LoadNum);
+	if (LoadNum)
+	{
+		LoadingImportCounter.Add(CounterID, LoadNum);
+	}
+	else
+	{
+		LoadExports_Async_LoadExports(ExportIndexs, CallBack, Priority);
+	}
 }
 
 void UConfigVarsLinker::LoadExports_Async_LoadExports(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority)
 {
 	UPackage* Package = GetPackage();
+	EObjectFlags ReLoadFlags = RF_Public | RF_NeedPostLoad | RF_NeedPostLoadSubobjects | RF_WillBeLoaded;
+
+#if WITH_EDITOR
+	ReLoadFlags |= RF_NeedLoad;
+#endif
 	this->ClearFlags(RF_NeedLoad | RF_WasLoaded | RF_LoadCompleted);
-	this->SetFlags(RF_Public | RF_NeedPostLoad | RF_NeedPostLoadSubobjects | RF_WillBeLoaded);
+	this->SetFlags(ReLoadFlags);
 
 	constexpr int32 PIEInstanceID = INDEX_NONE;
 
 	LoadPackageAsync(Package->GetLoadedPath(), Package->GetFName(), FLoadPackageAsyncDelegate::CreateWeakLambda(this, [this, ExportIndexs, CallBack](const FName&, UPackage*, EAsyncLoadingResult::Type Result) {
-		TArray<UConfigVarsData*> ExportObjs;
+		TArray<FStructView> OutExportData;
 
 		this->ClearFlags(RF_NeedLoad | RF_NeedPostLoad | RF_NeedPostLoadSubobjects | RF_WillBeLoaded);
 		this->SetFlags(RF_Public | RF_WasLoaded | RF_LoadCompleted);
@@ -537,94 +590,90 @@ void UConfigVarsLinker::LoadExports_Async_LoadExports(TArray<int32> ExportIndexs
 		if (Result != EAsyncLoadingResult::Succeeded)
 		{
 			// 加载失败
-			CallBack.ExecuteIfBound(ExportObjs);
+			CallBack.ExecuteIfBound(OutExportData);
 			return;
 		}
 
-		ExportObjs.Empty(ExportIndexs.Num());
+		{
+			TArray<FLoadedConfigVarsData*> LoadedConfigVarsDatas;
+			LoadedConfigVarsDatas_Async.PopAll(LoadedConfigVarsDatas);
+
+			FScopeLock ScopeLock(&ExportDataCritical);
+			for (FLoadedConfigVarsData* LoadedData : LoadedConfigVarsDatas)
+			{
+				ExportData[LoadedData->ExportIndex] = MoveTemp(LoadedData->Data);
+				delete LoadedData;
+			}
+		}
+
+		OutExportData.Empty(ExportIndexs.Num());
 
 		for (int32 Index : ExportIndexs)
 		{
-			UConfigVarsData* ExistingObject = FindObjectFast<UConfigVarsData>(this, ExportTable[Index].ObjectName);
-			ExportObjects[Index] = ExistingObject;
-			ExportObjs.Add(ExistingObject);
+			OutExportData.Add(ExportData[Index]);
 		}
-		CallBack.ExecuteIfBound(ExportObjs);
+		CallBack.ExecuteIfBound(OutExportData);
 
 	}), PKG_None, PIEInstanceID, Priority, nullptr, LOAD_NoVerify);
 }
 
-UConfigVarsData* UConfigVarsLinker::LoadData(int32 ExportIndex)
+FStructView UConfigVarsLinker::LoadData(int32 ExportIndex)
 {
-	UConfigVarsData* ConfigVarsData = nullptr;
-
 	if (ExportIndex == INDEX_NONE || !ExportTable.IsValidIndex(ExportIndex))
 	{
-		return ConfigVarsData;
+		return FStructView();
 	}
 
 	FConfigVarsExport& Export = ExportTable[ExportIndex];
 
 	// 第二级，在本身的数组中寻找。
-	if (IsValid(ExportObjects[ExportIndex]))
+	if (ExportData[ExportIndex].IsValid())
 	{
-		return ExportObjects[ExportIndex];
+		return ExportData[ExportIndex];
 	}
-
-
-	// 第三级，在内存中寻找。（可能已经被踢出了缓存，但是仍被别的可达对象所引用）
-	ConfigVarsData = FindObject<UConfigVarsData>(this, *(Export.ObjectName.ToString()));
-
 
 	/************************************************************************/
 	/* 第四级，反序列化															*/
 	/************************************************************************/
-	if (!ConfigVarsData && Export.ClassIndex != INDEX_NONE)
+	if (Export.ClassIndex != INDEX_NONE)
 	{
 		// 确保所有依赖已经加载
 		LoadImports_Sync({ ExportIndex });
 
-		TArray<UConfigVarsData*> OutObjects;
-		LoadExports_Sync({ ExportIndex }, OutObjects);
-		if (OutObjects.Num() == 1)
+		TArray<FStructView> OutExportData;
+		LoadExports_Sync({ ExportIndex }, OutExportData);
+		if (OutExportData.Num() == 1)
 		{
-			ConfigVarsData = OutObjects[0];
+			return OutExportData[0];
 		}
 	}
-	check(ConfigVarsData);
-	ExportObjects[ExportIndex] = ConfigVarsData;
 
-	return ConfigVarsData;
+	return FStructView();
 }
 
 void UConfigVarsLinker::LoadData_Async(int32 ExportIndex, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority)
 {
-	UConfigVarsData* ConfigVarsData = nullptr;
 
 	if (ExportIndex == INDEX_NONE || !ExportTable.IsValidIndex(ExportIndex))
 	{
-		CallBack.ExecuteIfBound({ ConfigVarsData });
+		TArray<FStructView> NullData;
+		CallBack.ExecuteIfBound(NullData);
 		return;
 	}
 
 	FConfigVarsExport& Export = ExportTable[ExportIndex];
 
 	// 第二级，在本身的数组中寻找。
-	if (IsValid(ExportObjects[ExportIndex]))
+	if (ExportData[ExportIndex].IsValid())
 	{
-		CallBack.ExecuteIfBound({ ExportObjects[ExportIndex] });
+		CallBack.ExecuteIfBound({ FStructView(ExportData[ExportIndex])});
 		return;
 	}
-
-
-	// 第三级，在内存中寻找。（可能已经被踢出了缓存，但是仍被别的可达对象所引用）
-	ConfigVarsData = FindObject<UConfigVarsData>(this, *(Export.ObjectName.ToString()));
-
 
 	/************************************************************************/
 	/* 第四级，反序列化															*/
 	/************************************************************************/
-	if (!ConfigVarsData && Export.ClassIndex != INDEX_NONE)
+	if (Export.ClassIndex != INDEX_NONE)
 	{
 		LoadExports_Async_Request({ ExportIndex }, CallBack, Priority);
 	}
@@ -648,37 +697,32 @@ FLinkerLoad* UConfigVarsLinker::CreateLinker_Sync()
 	return Linker;
 }
 
-UConfigVarsData* UConfigVarsLinker::LoadOrAddData(int32& InOutExportIndex, const UClass* TemplateDataClass)
+FStructView UConfigVarsLinker::LoadOrAddData(int32& InOutExportIndex, const UScriptStruct* TemplateDataStruct)
 {
-	UConfigVarsData* ConfigVarsData = nullptr;
-
 	if (InOutExportIndex != INDEX_NONE && ExportTable.IsValidIndex(InOutExportIndex))
 	{
 		FConfigVarsExport& Export = ExportTable[InOutExportIndex];
 
 		// 第二级，在本身的数组中寻找。
-		if (IsValid(ExportObjects[InOutExportIndex]))
+		if (ExportData[InOutExportIndex].IsValid())
 		{
-			return ExportObjects[InOutExportIndex];
+			return ExportData[InOutExportIndex];
 		}
-
-		// 第三级，在内存中寻找。（可能已经被踢出了缓存，但是仍被别的可达对象所引用）
-		ConfigVarsData = FindObject<UConfigVarsData>(this, *(Export.ObjectName.ToString()));
 
 
 		/************************************************************************/
 		/* 第四级，反序列化															*/
 		/************************************************************************/
-		if (!ConfigVarsData && Export.ClassIndex != INDEX_NONE)
+		if (Export.ClassIndex != INDEX_NONE)
 		{
 			// 确保所有依赖已经加载
 			LoadImports_Sync({ InOutExportIndex });
 
 			FConfigVarsImport& Import = ImportTable[Export.ClassIndex];
-			UClass* ExportClass = ((FSoftClassPath&)(Import.ObjectPath)).TryLoadClass<UObject>();
-			if (ExportClass)
+			UScriptStruct* ExportStruct = Cast<UScriptStruct>(Import.ObjectPath.TryLoad());
+			if (ExportStruct)
 			{
-				ConfigVarsData = NewObject<UConfigVarsData>(this, ExportClass, Export.ObjectName);
+				ExportData[InOutExportIndex].InitializeAs(ExportStruct);
 
 				FUObjectThreadContext& ThreadContext = FUObjectThreadContext::Get();
 				// Set up a load context
@@ -692,48 +736,36 @@ UConfigVarsData* UConfigVarsLinker::LoadOrAddData(int32& InOutExportIndex, const
 					
 					((FArchive*)LinkerLoad)->Seek(Export.SerialLocation);
 
-					ConfigVarsData->SerializeConfigVars(FStructuredArchiveFromArchive(*LinkerLoad).GetSlot().EnterRecord(), this);
+					FConfigVarsUtils::SerializeConfigVars(FStructuredArchiveFromArchive(*LinkerLoad).GetSlot().EnterRecord(), this, ExportData[InOutExportIndex]);
 				}
 				EndLoad(LoadContext);
+
+				return ExportData[InOutExportIndex];
 			}
 		}
 	}
 
 	// 第五级，重新创建
-	if (!ConfigVarsData && TemplateDataClass)
+	if (TemplateDataStruct)
 	{
-		FGuid UID = FGuid::NewGuid();
-		FString UniqueObjectGuid;
-		UID.AppendString(UniqueObjectGuid, EGuidFormats::UniqueObjectGuid);
-		ConfigVarsData = NewObject<UConfigVarsData>(this, TemplateDataClass, FName(TEXT("ConfigVarsData") + UniqueObjectGuid));
-		//ConfigVarsData->ClearFlags(RF_Transient);
-		// Notify the asset registry
-		FAssetRegistryModule::AssetCreated(ConfigVarsData);
+		ExportData.Emplace(TemplateDataStruct);
 
 		// Mark the package dirty...
 		GetPackage()->MarkPackageDirty();
+
+		InOutExportIndex = ExportData.Num() - 1;
+
+		return ExportData.Last();
 	}
 
-	if (InOutExportIndex != INDEX_NONE)
-	{
-		ExportObjects[InOutExportIndex] = ConfigVarsData;
-	}
-	else
-	{
-		InOutExportIndex = ExportObjects.Num();
-		ExportObjects.Add(ConfigVarsData);
-	}
-
-	check(ConfigVarsData);
-
-	return ConfigVarsData;
+	return FStructView();
 }
 
 void UConfigVarsLinker::RemoveData(int32 ExportIndex)
 {
-	if (ExportObjects.IsValidIndex(ExportIndex))
+	if (ExportData.IsValidIndex(ExportIndex))
 	{
-		ExportObjects[ExportIndex] = nullptr;
+		ExportData[ExportIndex] = FInstancedStruct();
 	}
 
 	if (ExportTable.IsValidIndex(ExportIndex))
@@ -745,27 +777,22 @@ void UConfigVarsLinker::RemoveData(int32 ExportIndex)
 
 //////////////////////////////////////////////////////////////////////////
 
-void UConfigVarsData::SerializeConfigVars(FStructuredArchive::FRecord ExportRecord, UConfigVarsLinker* Linker)
+void FConfigVarsUtils::SerializeConfigVars(FStructuredArchive::FRecord ExportRecord, UConfigVarsLinker* Linker, FStructView ConfigVarsData)
 {
-	FStructuredArchive::FRecord RealRecord = ExportRecord.EnterField(*GetName()).EnterRecord();
+	FStructuredArchive::FRecord RealRecord = ExportRecord.EnterField(TEXT("ConfigVarsData")).EnterRecord();
 
-	for (UClass* DataClass = GetClass(); DataClass->IsChildOf(UConfigVarsData::StaticClass()); DataClass = DataClass->GetSuperClass())
+	for (const UStruct* DataStruct = ConfigVarsData.GetScriptStruct(); DataStruct; DataStruct = DataStruct->GetSuperStruct())
 	{
-		SerializeProperties(RealRecord, Linker, DataClass, this);
+		SerializeProperties(RealRecord, Linker, DataStruct, ConfigVarsData.GetMemory());
 	}
-
-
-	SerializeNoConfigVars(ExportRecord, Linker);
-	// 仅作为静态数据存储Object而存在，不希望再走UObject的Serialize了。否则会被加入Export中。
-	//Super::Serialize(Record);
 }
 
 template<typename SrcType>
-void UConfigVarsData::SerializeProperties(FStructuredArchive::FRecord RealRecord, UConfigVarsLinker* Linker, const UStruct* DataStruct, SrcType* SrcData)
+void FConfigVarsUtils::SerializeProperties(FStructuredArchive::FRecord ExportRecord, UConfigVarsLinker* Linker, const UStruct* DataStruct, SrcType* SrcData)
 {
-	FArchive& UnderlyingArchive = RealRecord.GetUnderlyingArchive();
+	FArchive& UnderlyingArchive = ExportRecord.GetUnderlyingArchive();
 
-	FStructuredArchive::FStream PropertiesStream = RealRecord.EnterStream(*DataStruct->GetName());
+	FStructuredArchive::FStream PropertiesStream = ExportRecord.EnterStream(*DataStruct->GetName());
 
 	if (UnderlyingArchive.IsSaving())
 	{
@@ -778,12 +805,17 @@ void UConfigVarsData::SerializeProperties(FStructuredArchive::FRecord RealRecord
 		{
 			FProperty* ChildProperty = *PropertyIter;
 
-			static const FName NAME_NoConfigVars = "NoConfigVars";
 			if (!ChildProperty)
 			{
 				break;
 			}
-			if (ChildProperty->HasMetaData(NAME_NoConfigVars) || !ChildProperty->ShouldSerializeValue(UnderlyingArchive))
+			if (!ChildProperty->ShouldSerializeValue(UnderlyingArchive))
+			{
+				ChildProperty = ChildProperty->PropertyLinkNext;
+				continue;
+			}
+			FStructProperty* StructProperty = CastField<FStructProperty>(ChildProperty);
+			if (StructProperty && StructProperty->Struct->GetCppStructOps()->HasSerializer())
 			{
 				ChildProperty = ChildProperty->PropertyLinkNext;
 				continue;
@@ -893,7 +925,7 @@ void UConfigVarsData::SerializeProperties(FStructuredArchive::FRecord RealRecord
 }
 
 template<typename SrcType>
-void UConfigVarsData::SerializeItem(FStructuredArchive::FRecord PropertyRecord, FProperty* ChildProperty, UConfigVarsLinker* Linker, const UStruct* DataStruct, SrcType* SrcData)
+void FConfigVarsUtils::SerializeItem(FStructuredArchive::FRecord PropertyRecord, FProperty* ChildProperty, UConfigVarsLinker* Linker, const UStruct* DataStruct, SrcType* SrcData)
 {
 	FArchive& PropertyArchive = PropertyRecord.GetUnderlyingArchive();
 

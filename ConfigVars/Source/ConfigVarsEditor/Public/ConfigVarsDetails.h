@@ -4,15 +4,14 @@
 #include "IPropertyTypeCustomization.h"
 #include "Styling/SlateStyle.h"
 
-class UConfigVarsData;
+#include "StructView.h"
 
 struct FConfigVarsViewModel : public TSharedFromThis<FConfigVarsViewModel>
 {
-	FConfigVarsViewModel(TSharedRef<IPropertyHandle> InPropertyHandle, const UClass* InConfigVarsDataClass);
+	FConfigVarsViewModel(TSharedRef<IPropertyHandle> InPropertyHandle);
 
 	TSharedPtr<IPropertyHandle> PropertyHandle;
-	const UClass* ConfigVarsDataClass;
-	UConfigVarsData* ConfigVarsDataCache;
+	FStructView ConfigVarsDataCache;
 };
 
 class FConfigVarsDetails : public IPropertyTypeCustomization

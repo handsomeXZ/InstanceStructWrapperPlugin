@@ -3,17 +3,19 @@
 #include "CoreMinimal.h"
 
 #include "BitArray.h"
+#include "InstancedStruct.h"
+#include "StructView.h"
 
 #include "ConfigVarsLinker.generated.h"
 
 typedef TMap<int32, UObject*> FImportObjectMap;
 
-DECLARE_DELEGATE_OneParam(FLoadConfigVarsAsyncDelegate, TArray<UConfigVarsData*>);
+DECLARE_DELEGATE_OneParam(FLoadConfigVarsAsyncDelegate, TArray<FStructView>);
 
 struct FConfigVarsImport
 {
 	FConfigVarsImport() {}
-	FConfigVarsImport(UObject* InObject)
+	FConfigVarsImport(const UObject* InObject)
 		: ObjectPath(InObject)
 	{}
 	FConfigVarsImport(FSoftObjectPath& InObjectPath)
@@ -28,16 +30,10 @@ struct FConfigVarsImport
 struct FConfigVarsExport
 {
 	FConfigVarsExport()
-		: ObjectName(NAME_None)
-		, SerialLocation(0)
+		: SerialLocation(0)
 		, ClassIndex(INDEX_NONE)
 		, ImportSet(0)
 	{}
-	/**
-	 * The name of the UObject represented by this resource.
-	 * Serialized
-	 */
-	FName			ObjectName;
 
 	/**
 	 * The location offset from Export Serialize Head.
@@ -57,6 +53,17 @@ struct FConfigVarsExport
 	friend FArchive& operator<<(FArchive& Ar, FConfigVarsExport& Export);
 };
 
+struct FLoadedConfigVarsData
+{
+	FLoadedConfigVarsData() : ExportIndex(INDEX_NONE) {}
+	FLoadedConfigVarsData(int32 InExportIndex, const UScriptStruct* DataStruct)
+		: ExportIndex(InExportIndex)
+		, Data(DataStruct)
+	{}
+
+	int32 ExportIndex;
+	FInstancedStruct Data;
+};
 
 UCLASS()
 class UConfigVarsLinker : public UObject
@@ -68,11 +75,11 @@ public:
 	// 序列化为Import（这里记录的ImportObject，仅会在对应的ExportObject加载前才会被加载）
 	int32 ImportObject(class UObject* ImportObj);
 
-	UConfigVarsData* LoadData(int32 ExportIndex);
+	FStructView LoadData(int32 ExportIndex);
 	void LoadData_Async(int32 ExportIndex, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
 
 #if WITH_EDITOR
-	UConfigVarsData* LoadOrAddData(int32& InOutExportIndex, const UClass* TemplateDataClass);
+	FStructView LoadOrAddData(int32& InOutExportIndex, const UScriptStruct* TemplateDataStruct);
 	void RemoveData(int32 ExportIndex);
 #endif
 
@@ -86,7 +93,7 @@ private:
 	void SerializeTableData(FStructuredArchive::FRecord Record);
 
 	// 序列化为Export（暂时不提供给外部）
-	void ExportObject(FStructuredArchive::FRecord Record, class UConfigVarsData* ExportObj);
+	void ExportStruct(FStructuredArchive::FRecord Record, FStructView StructData);
 
 	// 真正反序列化Export数据
 	void ProcessPendingLoadExports(FStructuredArchive::FRecord Record);
@@ -95,7 +102,7 @@ private:
 	// 同步加载Imports（批量加载可以起到优化作用）
 	void LoadImports_Sync(TArray<int32> ExportIndexs);
 	// 同步加载Exports（批量加载可以起到优化作用）
-	void LoadExports_Sync(TArray<int32> ExportIndexs, TArray<UConfigVarsData*>& ExportObjs);
+	void LoadExports_Sync(TArray<int32> ExportIndexs, TArray<FStructView>& OutExportData);
 
 	// 异步加载Import（非批量）
 	int32 LoadImport_Async(int32 ExportIndex, FLoadPackageAsyncDelegate CallBack, int32 Priority);
@@ -113,11 +120,15 @@ private:
 	TArray<FConfigVarsExport> ExportTable;
 
 	UPROPERTY(Transient)
-	TArray<class UConfigVarsData*> ExportObjects;
+	TArray<FInstancedStruct> ExportData;
 
 	// -----------------------------------------------------------------------------------
 	// 用于存储待反序列化的Export队列。
 	TLockFreePointerListFIFO<void, PLATFORM_CACHE_LINE_SIZE> PendingLoadExports_Async;
+
+	TLockFreePointerListFIFO<FLoadedConfigVarsData, PLATFORM_CACHE_LINE_SIZE> LoadedConfigVarsDatas_Async;
+	FCriticalSection ExportDataCritical;
+
 	// Import 依赖加载的计数器
 	TMap<FGuid, int32> LoadingImportCounter;
 	// -----------------------------------------------------------------------------------
@@ -130,37 +141,6 @@ private:
 
 template<>
 struct TStructOpsTypeTraits<UConfigVarsLinker> : public TStructOpsTypeTraitsBase2<UConfigVarsLinker>
-{
-	enum
-	{
-		WithSerializer = true,
-	};
-};
-
-/************************************************************************/
-/* ConfigVarsData，让FInstancedStruct类型的ConfigVars支持懒加载和缓存优化。	*/
-/* 为了支持使用PlaceholderObject，必须继承自UObject。							*/
-/* 遵守：内部数据都为静态数据，不能修改	。										*/
-/************************************************************************/
-UCLASS(Abstract)
-class CONFIGVARS_API UConfigVarsData : public UObject
-{
-	GENERATED_BODY()
-public:
-	virtual void Serialize(FArchive& Ar) override final {}
-	virtual void Serialize(FStructuredArchive::FRecord Record) override final {}
-
-	virtual void SerializeConfigVars(FStructuredArchive::FRecord ExportRecord, UConfigVarsLinker* Linker);
-	virtual void SerializeNoConfigVars(FStructuredArchive::FRecord ExportRecord, UConfigVarsLinker* Linker) {}
-private:
-	template<typename SrcType>
-	void SerializeProperties(FStructuredArchive::FRecord ExportRecord, UConfigVarsLinker* Linker, const UStruct* DataStruct, SrcType* SrcData);
-	template<typename SrcType>
-	void SerializeItem(FStructuredArchive::FRecord PropertyRecord, FProperty* ChildProperty, UConfigVarsLinker* Linker, const UStruct* DataStruct, SrcType* SrcData);
-};
-
-template<>
-struct TStructOpsTypeTraits<UConfigVarsData> : public TStructOpsTypeTraitsBase2<UConfigVarsData>
 {
 	enum
 	{

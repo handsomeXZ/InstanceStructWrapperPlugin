@@ -7,19 +7,17 @@
 
 #include "InstancedStruct.h"
 #include "Engine/DataAsset.h"
-
+#include "StructView.h"
 #include "Containers/LruCache.h"
 
 #include "ConfigVarsReader.generated.h"
-
-class UConfigVarsData;
 
 // Default priority for all async loads
 static const int32 DefaultAsyncLoadPriority = 0;
 // Priority to try and load immediately
 static const int32 AsyncLoadHighPriority = INT32_MAX;
 
-DECLARE_DYNAMIC_DELEGATE_OneParam(FOnConfigVarsAsyncCallBack, const TArray<UConfigVarsData*>&, OutObjects);
+DECLARE_DYNAMIC_DELEGATE_OneParam(FOnConfigVarsAsyncCallBack, const TArray<FInstancedStruct>&, OutStructData);
 
 USTRUCT(BlueprintType)
 struct CONFIGVARS_API FConfigVarsBag
@@ -28,14 +26,8 @@ struct CONFIGVARS_API FConfigVarsBag
 public:
 	virtual ~FConfigVarsBag();
 
-	const UConfigVarsData* LoadData(UObject* Outer);
+	FConstStructView LoadData(UObject* Outer);
 	void LoadData_Async(UObject* Outer, FOnConfigVarsAsyncCallBack CallBack, int32 Priority = DefaultAsyncLoadPriority);
-
-	template<typename T>
-	const T* LoadData(UObject* Outer)
-	{
-		return Cast<T>(LoadData(Outer));
-	}
 
 	bool Serialize(FArchive& Ar);
 
@@ -48,7 +40,7 @@ public:
 #endif
 
 #if WITH_EDITOR
-	UConfigVarsData* LoadOrAddData(UObject* Outer, const UClass* DataClass);
+	FStructView LoadOrAddData(UObject* Outer, const UScriptStruct* DataStruct);
 #endif
 };
 
@@ -67,42 +59,8 @@ class UConfigVarsBagReader : public UObject
 	GENERATED_BODY()
 public:
 	UFUNCTION(BlueprintCallable, Category = ConfigVarsData)
-	static const UConfigVarsData* LoadData(UObject* Outer, FConfigVarsBag ConfigVarsBag);
+	static FInstancedStruct LoadData(UObject* Outer, FConfigVarsBag ConfigVarsBag);
 
 	UFUNCTION(BlueprintCallable, Category = ConfigVarsData)
 	static void LoadData_Async(UObject* Outer, FConfigVarsBag ConfigVarsBag, FOnConfigVarsAsyncCallBack CallBack, int32 Priority);
-};
-
-/************************************************************************/
-/************************************************************************/
-
-class FConfigVarsLRUCache : public FGCObject
-{
-public:
-	FConfigVarsLRUCache() : Cache() {}
-	FConfigVarsLRUCache(int32 InMaxNumElements) : Cache(InMaxNumElements) {}
-
-	void Add(const FPackageId& PakUID, const int32 UniqueID, UConfigVarsData* Data);
-	void Add(const uint32 Hash, UConfigVarsData* Data);
-
-	UConfigVarsData* FindAndTouchRef(const FPackageId& PakUID, const int32 UniqueID);
-	UConfigVarsData* FindAndTouchRef(const uint32 Hash);
-
-	UConfigVarsData* FindRef(const FPackageId& PakUID, const int32 UniqueID);
-	UConfigVarsData* FindRef(const uint32 Hash);
-
-	void Remove(const FPackageId& PakUID, const int32 UniqueID);
-	void Remove(const uint32 Hash);
-
-	uint32 GetHashKey(const FPackageId& PakUID, const int32 UniqueID) {
-		return HashCombine(GetTypeHash(PakUID), GetTypeHash(UniqueID));
-	}
-public:
-	// ~ FGCObject
-	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
-	virtual FString GetReferencerName() const override;
-	// ~ FGCObject
-private:
-	//https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Runtime/Core/Containers/TLruCache?application_version=5.0
-	TLruCache<uint32, UConfigVarsData*> Cache;
 };
