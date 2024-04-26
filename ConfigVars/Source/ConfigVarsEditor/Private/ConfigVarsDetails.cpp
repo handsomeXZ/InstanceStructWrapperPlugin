@@ -5,8 +5,18 @@
 
 #include "IDetailPropertyRow.h"
 #include "IDetailChildrenBuilder.h"
+#include "DetailWidgetRow.h"
+
+#include "PrivateAccessor.h"
+
+//////////////////////////////////////////////////////////////////////////
+#include "PropertyNode.h"
+#include "PropertyHandleImpl.h"
+//////////////////////////////////////////////////////////////////////////
 
 #define LOCTEXT_NAMESPACE "ConfigVarsDetails"
+
+PRIVATE_DEFINE_VAR(FPropertyNode, TWeakPtr<FPropertyNode>, ParentNodeWeakPtr);
 
 //////////////////////////////////////////////////////////////////////////
 
@@ -90,7 +100,6 @@ void FConfigVarsDetails::CustomizeChildren(TSharedRef<IPropertyHandle> StructPro
 		return;
 	}
 
-
 	StructPropertyHandle->EnumerateRawData([&StructBuilder, ViewModel = ViewModel](void* RawData, const int32 /*DataIndex*/, const int32 /*NumDatas*/)
 	{
 		if (FConfigVarsBag* Bag = static_cast<FConfigVarsBag*>(RawData))
@@ -102,6 +111,13 @@ void FConfigVarsDetails::CustomizeChildren(TSharedRef<IPropertyHandle> StructPro
 				.AllowChildren(true);
 
 			IDetailPropertyRow* Row = StructBuilder.AddExternalStructureProperty(StructOnScope.ToSharedRef(), NAME_None, Params);
+			TSharedPtr<IPropertyHandle> StructProviderHandle = Row->GetPropertyHandle()->GetParentHandle();
+
+			// 必须将Outmost的ParentNode设为OuterUObject，否则不能支持EditInlineNew的实例化Object。
+			// 注意：UDataTable的OuterObject是空的，所以它也就不能支持实例化Object。
+			TSharedPtr<FPropertyNode> PropertyNode = StaticCastSharedRef<FPropertyHandleBase>(StructProviderHandle.ToSharedRef())->GetPropertyNode();
+			PRIVATE_GET_VAR(PropertyNode.Get(), ParentNodeWeakPtr) = StaticCastSharedRef<FPropertyHandleBase>(ViewModel->PropertyHandle.ToSharedRef())->GetPropertyNode();
+
 			Row->DisplayName(ViewModel->PropertyHandle->GetPropertyDisplayName());
 		}
 		return true;
