@@ -127,6 +127,7 @@ private:
 	TLockFreePointerListFIFO<void, PLATFORM_CACHE_LINE_SIZE> PendingLoadExports_Async;
 
 	TLockFreePointerListFIFO<FLoadedConfigVarsData, PLATFORM_CACHE_LINE_SIZE> LoadedConfigVarsDatas_Async;
+	// ExportData的写入仅发生在游戏线程，在其他线程的读取需要加锁。
 	FCriticalSection ExportDataCritical;
 
 	// Import 依赖加载的计数器
