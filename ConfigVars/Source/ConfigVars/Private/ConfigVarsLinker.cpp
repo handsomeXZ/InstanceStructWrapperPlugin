@@ -961,6 +961,8 @@ void FConfigVarsUtils::SerializeProperties(FStructuredArchive::FRecord ExportRec
 
 
 	}
+
+	SerializeProperties(ExportRecord, Linker, DataStruct->GetSuperStruct(), SrcData);
 }
 
 template<typename SrcType>
@@ -970,6 +972,12 @@ void FConfigVarsUtils::SerializeItem(FStructuredArchive::FRecord PropertyRecord,
 
 	if (FObjectProperty* ObjectProperty = CastField<FObjectProperty>(ChildProperty))
 	{
+		static const FName NAME_ForceLazyLoadExportObject = "ConfigVars";
+		bool bIsExportObject = ChildProperty->HasAnyPropertyFlags(CPF_ExportObject);
+		bool bForceLazyLoadExportObject = ChildProperty->HasMetaData(NAME_ForceLazyLoadExportObject) && bIsExportObject;
+
+		PropertyRecord << SA_VALUE(TEXT("ForceLazyLoadExportObject"), bForceLazyLoadExportObject);
+
 		if (PropertyArchive.IsSaving())
 		{
 			UObject* ObjectValue = ObjectProperty->GetObjectPropertyValue((uint8*)SrcData + ChildProperty->GetOffset_ForInternal());
@@ -978,12 +986,76 @@ void FConfigVarsUtils::SerializeItem(FStructuredArchive::FRecord PropertyRecord,
 				ObjectValue = nullptr;
 			}
 
-			FConfigVarsUtils::SerializeObject(PropertyRecord, Linker, ObjectValue);
+			if (!bIsExportObject)
+			{
+				// 非ExportObject的依赖Object都会懒加载
+				FConfigVarsUtils::SerializeObject(PropertyRecord, Linker, ObjectValue);
+			}
+			else if (bForceLazyLoadExportObject)
+			{
+				// 强制ExportObject被懒加载
+				bool bIsNullExportObject = ObjectValue == nullptr;
+				PropertyRecord << SA_VALUE(TEXT("IsNullExportObject"), bIsNullExportObject);
+				if (!bIsNullExportObject)
+				{
+					FName ExportObjectName = ObjectValue->GetFName();
+					UClass* ExportObjectClass = ObjectValue->GetClass();
+					UObject* ExportObjectOuter = ObjectValue->GetOuter();
+					static_assert(sizeof(ObjectValue->GetFlags()) <= sizeof(uint32), "Expect EObjectFlags to be uint32");
+					uint32 ExportObjectFlags = (uint32)ObjectValue->GetFlags();
+
+					PropertyRecord << SA_VALUE(TEXT("ExportObjectOuter"), ExportObjectOuter);
+					PropertyRecord << SA_VALUE(TEXT("ExportObjectName"), ExportObjectName);
+					PropertyRecord << SA_VALUE(TEXT("ExportObjectFlags"), ExportObjectFlags);
+					FConfigVarsUtils::SerializeObject(PropertyRecord, Linker, ExportObjectClass);
+					SerializeProperties(PropertyRecord, Linker, ExportObjectClass, ObjectValue);
+				}
+			}
+			else
+			{
+				// ExportObject在资产反序列化时会一起被处理
+				PropertyRecord << SA_VALUE(TEXT("ExportObject"), ObjectValue);
+			}
 		}
 		else if (PropertyArchive.IsLoading())
 		{
 			UObject* ObjectValue = nullptr;
-			FConfigVarsUtils::SerializeObject(PropertyRecord, Linker, ObjectValue);
+			
+			if (!bIsExportObject)
+			{
+				// 非ExportObject的依赖Object都会懒加载
+				FConfigVarsUtils::SerializeObject(PropertyRecord, Linker, ObjectValue);
+			}
+			else if (bForceLazyLoadExportObject)
+			{
+				// 强制ExportObject被懒加载
+				bool bIsNullExportObject = false;
+				PropertyRecord << SA_VALUE(TEXT("IsNullExportObject"), bIsNullExportObject);
+				if (!bIsNullExportObject)
+				{
+					FName ExportObjectName = NAME_None;
+					UClass* ExportObjectClass = nullptr;
+					UObject* ExportObjectOuter = nullptr;
+					uint32 ExportObjectFlags = RF_NoFlags;
+
+					PropertyRecord << SA_VALUE(TEXT("ExportObjectOuter"), ExportObjectOuter);
+					PropertyRecord << SA_VALUE(TEXT("ExportObjectName"), ExportObjectName);
+					PropertyRecord << SA_VALUE(TEXT("ExportObjectFlags"), ExportObjectFlags);
+					FConfigVarsUtils::SerializeObject(PropertyRecord, Linker, ExportObjectClass);
+
+					FStaticConstructObjectParameters Params(ExportObjectClass);
+					Params.Outer = ExportObjectOuter;
+					Params.Name = ExportObjectName;
+					Params.SetFlags = (EObjectFlags)ExportObjectFlags;
+					ObjectValue = StaticConstructObject_Internal(Params);
+					SerializeProperties(PropertyRecord, Linker, ExportObjectClass, ObjectValue);
+				}
+			}
+			else
+			{
+				// 在资产反序列化时会一起被处理
+				PropertyRecord << SA_VALUE(TEXT("ExportObject"), ObjectValue);
+			}
 
 			ObjectProperty->SetObjectPropertyValue((uint8*)SrcData + ChildProperty->GetOffset_ForInternal(), ObjectValue);
 		}
@@ -992,6 +1064,8 @@ void FConfigVarsUtils::SerializeItem(FStructuredArchive::FRecord PropertyRecord,
 	{
 		if (StructProperty->Struct->IsChildOf(FInstancedStruct::StaticStruct()))
 		{
+//////////////////////////////////////////////////////////////////////////
+// FInstancedStruct 特殊处理
 			UScriptStruct* DataStruct = nullptr;
 			FInstancedStruct* InstancedStruct = StructProperty->ContainerPtrToValuePtr<FInstancedStruct>((void*)SrcData);
 			DataStruct = const_cast<UScriptStruct*>(InstancedStruct->GetScriptStruct());
@@ -1006,6 +1080,7 @@ void FConfigVarsUtils::SerializeItem(FStructuredArchive::FRecord PropertyRecord,
 				InstancedStruct->InitializeAs(DataStruct);
 				SerializeProperties(PropertyRecord, Linker, DataStruct, InstancedStruct->GetMemory());
 			}
+//////////////////////////////////////////////////////////////////////////
 		}
 		else
 		{

@@ -104,21 +104,29 @@ void FConfigVarsDetails::CustomizeChildren(TSharedRef<IPropertyHandle> StructPro
 	{
 		if (FConfigVarsBag* Bag = static_cast<FConfigVarsBag*>(RawData))
 		{
+			TSharedPtr<IPropertyHandle> StructPropertyHandle = ViewModel->PropertyHandle;
+
 			TSharedPtr<FStructOnScope> StructOnScope = MakeShared<FStructOnScope>(ViewModel->ConfigVarsDataCache.GetScriptStruct(), ViewModel->ConfigVarsDataCache.GetMemory());
 			
 			FAddPropertyParams Params = FAddPropertyParams()
-				.UniqueId(ViewModel->PropertyHandle->GetProperty()->GetFName())
+				.UniqueId(StructPropertyHandle->GetProperty()->GetFName())
 				.AllowChildren(true);
 
 			IDetailPropertyRow* Row = StructBuilder.AddExternalStructureProperty(StructOnScope.ToSharedRef(), NAME_None, Params);
 			TSharedPtr<IPropertyHandle> StructProviderHandle = Row->GetPropertyHandle()->GetParentHandle();
 
+			Row->GetPropertyHandle()->SetOnChildPropertyValueChanged(FSimpleDelegate::CreateSPLambda(StructPropertyHandle.ToSharedRef(), [StructPropertyHandle]() {
+				StructPropertyHandle->NotifyPreChange();
+				StructPropertyHandle->NotifyPostChange(EPropertyChangeType::ValueSet);
+				StructPropertyHandle->NotifyFinishedChangingProperties();
+			}));
+
 			// 必须将Outmost的ParentNode设为OuterUObject，否则不能支持EditInlineNew的实例化Object。
 			// 注意：UDataTable的OuterObject是空的，所以它也就不能支持实例化Object。
 			TSharedPtr<FPropertyNode> PropertyNode = StaticCastSharedRef<FPropertyHandleBase>(StructProviderHandle.ToSharedRef())->GetPropertyNode();
-			PRIVATE_GET_VAR(PropertyNode.Get(), ParentNodeWeakPtr) = StaticCastSharedRef<FPropertyHandleBase>(ViewModel->PropertyHandle.ToSharedRef())->GetPropertyNode();
+			PRIVATE_GET_VAR(PropertyNode.Get(), ParentNodeWeakPtr) = StaticCastSharedRef<FPropertyHandleBase>(StructPropertyHandle.ToSharedRef())->GetPropertyNode();
 
-			Row->DisplayName(ViewModel->PropertyHandle->GetPropertyDisplayName());
+			Row->DisplayName(StructPropertyHandle->GetPropertyDisplayName());
 		}
 		return true;
 	});
