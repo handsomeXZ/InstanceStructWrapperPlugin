@@ -9,17 +9,19 @@ public class ConfigVarsEditor : ModuleRules
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 
-        var EngineDir = Path.GetFullPath(Target.RelativeEnginePath);
+    var EngineDir = Path.GetFullPath(Target.RelativeEnginePath);
 
         PublicIncludePaths.AddRange(
             new string[] {
-                System.IO.Path.Combine(GetModuleDirectory("CoreUObject"), "Private")
+                System.IO.Path.Combine(GetModuleDirectory("CoreUObject"), "Private"),
+                System.IO.Path.Combine(GetModuleDirectory("PropertyEditor"), "Private"),
            }
         );
 
         PrivateIncludePaths.AddRange(
             new string[] {
-                System.IO.Path.Combine(GetModuleDirectory("CoreUObject"), "Private")
+                System.IO.Path.Combine(GetModuleDirectory("CoreUObject"), "Private"),
+                System.IO.Path.Combine(GetModuleDirectory("PropertyEditor"), "Private"),
            }
         );
 

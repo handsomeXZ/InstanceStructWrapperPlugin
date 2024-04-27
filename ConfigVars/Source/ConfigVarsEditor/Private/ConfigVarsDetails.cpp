@@ -3,84 +3,25 @@
 #include "ConfigVarsLinker.h"
 #include "ConfigVarsReader.h"
 
-#include "IStructureDataProvider.h"
+#include "IDetailPropertyRow.h"
 #include "IDetailChildrenBuilder.h"
+#include "DetailWidgetRow.h"
+
+#include "PrivateAccessor.h"
+
+//////////////////////////////////////////////////////////////////////////
+#include "PropertyNode.h"
+#include "PropertyHandleImpl.h"
+//////////////////////////////////////////////////////////////////////////
 
 #define LOCTEXT_NAMESPACE "ConfigVarsDetails"
 
-class FConfigVarsDataProvider : public IStructureDataProvider
-{
-public:
-	FConfigVarsDataProvider() = default;
-
-	explicit FConfigVarsDataProvider(const TSharedPtr<FConfigVarsViewModel>& InViewModel)
-		: ViewModel(InViewModel)
-	{
-	}
-
-	virtual ~FConfigVarsDataProvider() override {}
-
-	void Reset()
-	{
-		ViewModel = nullptr;
-	}
-
-	virtual bool IsValid() const override
-	{
-		return ViewModel.IsValid();
-	}
-
-	virtual const UStruct* GetBaseStructure() const override
-	{
-		if (!ViewModel.IsValid())
-		{
-			return nullptr;
-		}
-		return ViewModel->ConfigVarsDataClass;
-	}
-
-	virtual void GetInstances(TArray<TSharedPtr<FStructOnScope>>& OutInstances) const override
-	{
-		if (!ViewModel.IsValid())
-		{
-			return;
-		}
-		ViewModel->PropertyHandle->EnumerateRawData([&OutInstances, ViewModel = ViewModel](void* RawData, const int32 /*DataIndex*/, const int32 /*NumDatas*/)
-		{
-			if (FConfigVarsBag* Bag = static_cast<FConfigVarsBag*>(RawData))
-			{
-				TSharedPtr<FStructOnScope> StructOnScope = MakeShared<FStructOnScope>(ViewModel->ConfigVarsDataClass, (uint8*)ViewModel->ConfigVarsDataCache);
-				OutInstances.Add(StructOnScope);
-			}
-			return true;
-		});
-		
-	}
-
-	virtual bool IsPropertyIndirection() const override
-	{
-		return true;
-	}
-
-	virtual uint8* GetValueBaseAddress(uint8* ParentValueAddress, const UStruct* ExpectedType) const override
-	{
-		if (!ParentValueAddress)
-		{
-			return nullptr;
-		}
-		return ParentValueAddress;
-	}
-
-protected:
-
-	TSharedPtr<FConfigVarsViewModel> ViewModel;
-};
+PRIVATE_DEFINE_VAR(FPropertyNode, TWeakPtr<FPropertyNode>, ParentNodeWeakPtr);
 
 //////////////////////////////////////////////////////////////////////////
 
-FConfigVarsViewModel::FConfigVarsViewModel(TSharedRef<IPropertyHandle> InPropertyHandle, const UClass* InConfigVarsDataClass)
+FConfigVarsViewModel::FConfigVarsViewModel(TSharedRef<IPropertyHandle> InPropertyHandle)
 	: PropertyHandle(InPropertyHandle)
-	, ConfigVarsDataClass(InConfigVarsDataClass)
 	, ConfigVarsDataCache(nullptr)
 {
 
@@ -105,51 +46,51 @@ TSharedRef<IPropertyTypeCustomization> FConfigVarsDetails::MakeInstance()
 
 void FConfigVarsDetails::CustomizeHeader(TSharedRef<IPropertyHandle> StructPropertyHandle, class FDetailWidgetRow& HeaderRow, IPropertyTypeCustomizationUtils& StructCustomizationUtils)
 {
-	static const FName NAME_DataClass = "DataClass";
-	UClass* ConfigVarsDataClass = nullptr;
+	static const FName NAME_DataStruct = "DataStruct";
+	UScriptStruct* ConfigVarsDataStruct = nullptr;
 	{
-		const FString& DataClassName = StructPropertyHandle->GetMetaData(NAME_DataClass);
-		if (!DataClassName.IsEmpty())
+		const FString& DataStructName = StructPropertyHandle->GetMetaData(NAME_DataStruct);
+		if (!DataStructName.IsEmpty())
 		{
-			ConfigVarsDataClass = UClass::TryFindTypeSlow<UClass>(DataClassName);
-			if (!ConfigVarsDataClass)
+			ConfigVarsDataStruct = UClass::TryFindTypeSlow<UScriptStruct>(DataStructName);
+			if (!ConfigVarsDataStruct)
 			{
-				ConfigVarsDataClass = LoadObject<UClass>(nullptr, *DataClassName);
+				ConfigVarsDataStruct = LoadObject<UScriptStruct>(nullptr, *DataStructName);
 			}
 		}
 	}
 
-	if (!ConfigVarsDataClass)
+	if (!ConfigVarsDataStruct)
 	{
 		return;
 	}
 
-	TArray<UObject*> OuterObjects;
-	StructPropertyHandle->GetOuterObjects(OuterObjects);
+	TArray<UPackage*> Packages;
+	StructPropertyHandle->GetOuterPackages(Packages);
 
-	if (OuterObjects.Num() != 1 || OuterObjects[0]->HasAnyFlags(RF_ClassDefaultObject))
+	if (Packages.Num() != 1 || Packages[0]->HasAnyFlags(RF_ClassDefaultObject))
 	{
 		return;
 	}
 
-	ViewModel = MakeShared<FConfigVarsViewModel>(StructPropertyHandle, ConfigVarsDataClass);
+	ViewModel = MakeShared<FConfigVarsViewModel>(StructPropertyHandle);
 
 	FConfigVarsBag* Bag = nullptr;
 
 
 	// 非事务，不允许撤回
-	StructPropertyHandle->EnumerateRawData([&Bag, &OuterObjects, ViewModel = ViewModel, ConfigVarsDataClass](void* RawData, const int32 /*DataIndex*/, const int32 /*NumDatas*/)
+	StructPropertyHandle->EnumerateRawData([&Bag, &Packages, ViewModel = ViewModel, ConfigVarsDataStruct](void* RawData, const int32 /*DataIndex*/, const int32 /*NumDatas*/)
 	{
 		Bag = static_cast<FConfigVarsBag*>(RawData);
 		if (Bag)
 		{
-			Bag->Outermost = OuterObjects[0];
-			ViewModel->ConfigVarsDataCache = Bag->LoadOrAddData(OuterObjects[0], ConfigVarsDataClass);
+			Bag->Outermost = Packages[0];
+			ViewModel->ConfigVarsDataCache = Bag->LoadOrAddData(Packages[0], ConfigVarsDataStruct);
 		}
 		return true;
 	});
 
-	check(Bag);
+
 }
 
 void FConfigVarsDetails::CustomizeChildren(TSharedRef<IPropertyHandle> StructPropertyHandle, class IDetailChildrenBuilder& StructBuilder, IPropertyTypeCustomizationUtils& StructCustomizationUtils)
@@ -159,23 +100,33 @@ void FConfigVarsDetails::CustomizeChildren(TSharedRef<IPropertyHandle> StructPro
 		return;
 	}
 
-
-	//ContainerViewModel->UpdateChildMetaData();
-	//ArrayHandle->SetOnPropertyValueChanged(FSimpleDelegate::CreateSP(ContainerViewModel.ToSharedRef(), &FInstancedStructWrapperContainerViewModel::OnContainerProxyValueChanged));
-	//ArrayHandle->SetOnChildPropertyValueChanged(FSimpleDelegate::CreateSP(ContainerViewModel.ToSharedRef(), &FInstancedStructWrapperContainerViewModel::OnContainerProxyValueChanged));
-	
-	//FObjectProperty* ObjectProperty = CastField<FObjectProperty>(DataCacheHandle->GetProperty());
-
 	StructPropertyHandle->EnumerateRawData([&StructBuilder, ViewModel = ViewModel](void* RawData, const int32 /*DataIndex*/, const int32 /*NumDatas*/)
 	{
 		if (FConfigVarsBag* Bag = static_cast<FConfigVarsBag*>(RawData))
 		{
-			FAddPropertyParams Params = FAddPropertyParams()
-				.UniqueId(ViewModel->ConfigVarsDataCache->GetFName())
-				.AllowChildren(true)
-				.HideRootObjectNode(true);
+			TSharedPtr<IPropertyHandle> StructPropertyHandle = ViewModel->PropertyHandle;
 
-			IDetailPropertyRow* Row = StructBuilder.AddExternalObjects({ ViewModel->ConfigVarsDataCache }, Params);
+			TSharedPtr<FStructOnScope> StructOnScope = MakeShared<FStructOnScope>(ViewModel->ConfigVarsDataCache.GetScriptStruct(), ViewModel->ConfigVarsDataCache.GetMemory());
+			
+			FAddPropertyParams Params = FAddPropertyParams()
+				.UniqueId(StructPropertyHandle->GetProperty()->GetFName())
+				.AllowChildren(true);
+
+			IDetailPropertyRow* Row = StructBuilder.AddExternalStructureProperty(StructOnScope.ToSharedRef(), NAME_None, Params);
+			TSharedPtr<IPropertyHandle> StructProviderHandle = Row->GetPropertyHandle()->GetParentHandle();
+
+			Row->GetPropertyHandle()->SetOnChildPropertyValueChanged(FSimpleDelegate::CreateSPLambda(StructPropertyHandle.ToSharedRef(), [StructPropertyHandle]() {
+				StructPropertyHandle->NotifyPreChange();
+				StructPropertyHandle->NotifyPostChange(EPropertyChangeType::ValueSet);
+				StructPropertyHandle->NotifyFinishedChangingProperties();
+			}));
+
+			// 必须将Outmost的ParentNode设为OuterUObject，否则不能支持EditInlineNew的实例化Object。
+			// 注意：UDataTable的OuterObject是空的，所以它也就不能支持实例化Object。
+			TSharedPtr<FPropertyNode> PropertyNode = StaticCastSharedRef<FPropertyHandleBase>(StructProviderHandle.ToSharedRef())->GetPropertyNode();
+			PRIVATE_GET_VAR(PropertyNode.Get(), ParentNodeWeakPtr) = StaticCastSharedRef<FPropertyHandleBase>(StructPropertyHandle.ToSharedRef())->GetPropertyNode();
+
+			Row->DisplayName(StructPropertyHandle->GetPropertyDisplayName());
 		}
 		return true;
 	});
