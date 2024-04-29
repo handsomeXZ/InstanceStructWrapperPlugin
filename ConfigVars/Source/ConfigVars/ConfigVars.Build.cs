@@ -22,20 +22,6 @@ public class ConfigVars : ModuleRules
                 System.IO.Path.Combine(GetModuleDirectory("CoreUObject"), "Private")
            }
         );
-
-        PublicIncludePaths.AddRange(
-			new string[] {
-				// ... add public include paths required here ...
-			}
-			);
-				
-		
-		PrivateIncludePaths.AddRange(
-			new string[] {
-				// ... add other private include paths required here ...
-			}
-			);
-			
 		
 		PublicDependencyModuleNames.AddRange(
 			new string[]
@@ -55,7 +41,8 @@ public class ConfigVars : ModuleRules
 				"Slate",
 				"SlateCore",
 				// ... add private dependencies that you statically link with here ...	
-			}
+				"StructUtilsEngine",
+            }
 			);
 		
 		

@@ -5,6 +5,7 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 
+#include "Kismet/BlueprintFunctionLibrary.h"
 #include "InstancedStruct.h"
 #include "Engine/DataAsset.h"
 #include "StructView.h"
@@ -26,8 +27,10 @@ struct CONFIGVARS_API FConfigVarsBag
 public:
 	virtual ~FConfigVarsBag();
 
-	FConstStructView LoadData(UObject* Outer);
-	void LoadData_Async(UObject* Outer, FOnConfigVarsAsyncCallBack CallBack, int32 Priority = DefaultAsyncLoadPriority);
+	FConstStructView LoadData(UObject* Outer) const;
+	void LoadData_Async(UObject* Outer, FOnConfigVarsAsyncCallBack CallBack, int32 Priority = DefaultAsyncLoadPriority) const;
+	bool IsValid() const { return ExportIndex != INDEX_NONE; }
+
 
 	bool Serialize(FArchive& Ar);
 
@@ -54,13 +57,15 @@ struct TStructOpsTypeTraits<FConfigVarsBag> : public TStructOpsTypeTraitsBase2<F
 };
 
 UCLASS()
-class UConfigVarsBagReader : public UObject
+class CONFIGVARS_API UConfigVarsBagReader : public UBlueprintFunctionLibrary
 {
 	GENERATED_BODY()
 public:
-	UFUNCTION(BlueprintCallable, Category = ConfigVarsData)
-	static FInstancedStruct LoadData(UObject* Outer, FConfigVarsBag ConfigVarsBag);
+	UFUNCTION(BlueprintCallable, CustomThunk, Category = "ConfigVarsData", meta = (CustomStructureParam = "Value", ExpandEnumAsExecs = "ExecResult"))
+	static void GetValue(EStructUtilsResult& ExecResult, UObject* Outer, UPARAM(Ref) const FConfigVarsBag& ConfigVarsBag, int32& Value);
 
-	UFUNCTION(BlueprintCallable, Category = ConfigVarsData)
+	UFUNCTION(BlueprintCallable, Category = "ConfigVarsData")
 	static void LoadData_Async(UObject* Outer, FConfigVarsBag ConfigVarsBag, FOnConfigVarsAsyncCallBack CallBack, int32 Priority);
+private:
+	DECLARE_FUNCTION(execGetValue);
 };

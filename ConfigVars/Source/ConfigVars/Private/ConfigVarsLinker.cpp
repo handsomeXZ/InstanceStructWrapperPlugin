@@ -146,7 +146,7 @@ void UConfigVarsLinker::Serialize(FStructuredArchive::FRecord Record)
 
 		// 只有FLinkerLoad or FLinkerSave可以取到Linker。
 		// 而FPackageHarvester不是我们的真正FileWriter的Ar，仅仅是记录一些额外的信息，例如引用到的FName。
-		if (Ar.GetLinker() || Ar.IsCooking())
+		if (!Ar.GetLinker() || Ar.IsCooking())
 		{
 			VerifyAllExportLoaded();
 		}
@@ -160,6 +160,7 @@ void UConfigVarsLinker::Serialize(FStructuredArchive::FRecord Record)
 	{
 		if (PendingLoadExports_Async.IsEmpty())
 		{
+			// 仅编辑器的同步加载 LoadOrAddData() 会走这里
 			SerializeHeadData(Record);
 			SerializeExportData(Record);
 			SerializeTableData(Record);
@@ -180,7 +181,14 @@ void UConfigVarsLinker::SerializeHeadData(FStructuredArchive::FRecord Record)
 		ImportTable.Empty();
 		ExportTable.Empty();
 
-		int32 ExportObjectsNum = ExportData.Num();
+		int32 ExportObjectsNum = 0;
+		for (FInstancedStruct& Data : ExportData)
+		{
+			if (Data.IsValid())
+			{
+				++ExportObjectsNum;
+			}
+		}
 		Ar << ExportObjectsNum;
 
 		int32 InitialLocation = Ar.Tell();
@@ -193,7 +201,6 @@ void UConfigVarsLinker::SerializeHeadData(FStructuredArchive::FRecord Record)
 
 		// 常规反序列化流程
 		{
-			FScopeLock ScopeLock(&ExportDataCritical);
 			ExportData.SetNum(ExportObjectsNum);
 		}
 
@@ -211,7 +218,6 @@ void UConfigVarsLinker::SerializeExportData(FStructuredArchive::FRecord Record)
 		int32 ExportDataSize = 0;
 		FSerialSizeScope Scope(Ar, ExportDataSize);	// ExportDataSize
 
-		FScopeLock ScopeLock(&ExportDataCritical);
 		for (FInstancedStruct& Data : ExportData)
 		{
 			if (Data.IsValid())

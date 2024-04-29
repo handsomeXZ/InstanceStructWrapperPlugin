@@ -3,15 +3,64 @@
 #include "UObject/Package.h"
 #include "UObject/ObjectResource.h"
 #include "UObject/UObjectGlobals.h"
+#include "StructUtilsFunctionLibrary.h"
 
 #include "BitArray.h"
 #include "ConfigVarsLinker.h"
 
 static int32 LRUCacheMaxNum = 128;
 
-FInstancedStruct UConfigVarsBagReader::LoadData(UObject* Outer, FConfigVarsBag ConfigVarsBag)
+#define LOCTEXT_NAMESPACE "ConfigVarsBagReader"
+
+void UConfigVarsBagReader::GetValue(EStructUtilsResult& ExecResult, UObject* Outer, const FConfigVarsBag& ConfigVarsBag, int32& Value)
 {
-	return FInstancedStruct(ConfigVarsBag.LoadData(Outer));
+	// We should never hit this! stubs to avoid NoExport on the class.
+	checkNoEntry();
+}
+
+DEFINE_FUNCTION(UConfigVarsBagReader::execGetValue)
+{
+	P_GET_ENUM_REF(EStructUtilsResult, ExecResult);
+	P_GET_OBJECT(UObject, Outer);
+	P_GET_STRUCT_REF(FConfigVarsBag, ConfigVarsBag);
+
+
+	// Read wildcard Value input.
+	Stack.MostRecentPropertyAddress = nullptr;
+	Stack.MostRecentPropertyContainer = nullptr;
+	Stack.StepCompiledIn<FStructProperty>(nullptr);
+
+	const FStructProperty* ValueProp = CastField<FStructProperty>(Stack.MostRecentProperty);
+	void* ValuePtr = Stack.MostRecentPropertyAddress;
+
+	P_FINISH;
+
+	ExecResult = EStructUtilsResult::NotValid;
+
+	if (!ValueProp || !ValuePtr)
+	{
+		FBlueprintExceptionInfo ExceptionInfo(
+			EBlueprintExceptionType::AbortExecution,
+			LOCTEXT("ConfigVars_GetInvalidValueWarning", "Failed to resolve the Value for Get ConfigVars Value")
+		);
+
+		FBlueprintCoreDelegates::ThrowScriptException(P_THIS, Stack, ExceptionInfo);
+	}
+	else
+	{
+		P_NATIVE_BEGIN;
+		ExecResult = EStructUtilsResult::NotValid;
+		if (IsValid(Outer) && ConfigVarsBag.IsValid())
+		{
+			FConstStructView StructView = ConfigVarsBag.LoadData(Outer);
+			if (StructView.IsValid() && StructView.GetScriptStruct()->IsChildOf(ValueProp->Struct))
+			{
+				ValueProp->Struct->CopyScriptStruct(ValuePtr, StructView.GetMemory());
+				ExecResult = EStructUtilsResult::Valid;
+			}
+		}
+		P_NATIVE_END;
+	}
 }
 
 void UConfigVarsBagReader::LoadData_Async(UObject* Outer, FConfigVarsBag ConfigVarsBag, FOnConfigVarsAsyncCallBack CallBack, int32 Priority)
@@ -47,7 +96,7 @@ bool FConfigVarsBag::Serialize(FArchive& Ar)
 	return true;
 }
 
-FConstStructView FConfigVarsBag::LoadData(UObject* Outer)
+FConstStructView FConfigVarsBag::LoadData(UObject* Outer) const
 {
 	if (!Outer)
 	{
@@ -71,7 +120,7 @@ FConstStructView FConfigVarsBag::LoadData(UObject* Outer)
 	return FConstStructView();
 }
 
-void FConfigVarsBag::LoadData_Async(UObject* Outer, FOnConfigVarsAsyncCallBack CallBack, int32 Priority)
+void FConfigVarsBag::LoadData_Async(UObject* Outer, FOnConfigVarsAsyncCallBack CallBack, int32 Priority) const
 {
 	if (!Outer)
 	{
@@ -130,3 +179,5 @@ FStructView FConfigVarsBag::LoadOrAddData(UObject* Outer, const UScriptStruct* D
 	return FStructView();
 }
 #endif
+
+#undef LOCTEXT_NAMESPACE
