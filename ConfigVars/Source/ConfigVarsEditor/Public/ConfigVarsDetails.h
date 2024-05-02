@@ -6,13 +6,7 @@
 
 #include "StructView.h"
 
-struct FConfigVarsViewModel : public TSharedFromThis<FConfigVarsViewModel>
-{
-	FConfigVarsViewModel(TSharedRef<IPropertyHandle> InPropertyHandle);
-
-	TSharedPtr<IPropertyHandle> PropertyHandle;
-	FStructView ConfigVarsDataCache;
-};
+struct FConfigVarsViewModel;
 
 class FConfigVarsDetails : public IPropertyTypeCustomization
 {
@@ -24,6 +18,9 @@ public:
 	virtual void CustomizeChildren(TSharedRef<IPropertyHandle> StructPropertyHandle, class IDetailChildrenBuilder& StructBuilder, IPropertyTypeCustomizationUtils& StructCustomizationUtils) override;
 
 	static TSharedRef<IPropertyTypeCustomization> MakeInstance();
+
+protected:
+	void OnPropertyValueChangedWithData(const FPropertyChangedEvent& ChangedEvent);
 
 protected:
 	TSharedPtr<FConfigVarsViewModel> ViewModel;

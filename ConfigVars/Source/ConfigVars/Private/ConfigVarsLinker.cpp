@@ -1,7 +1,11 @@
 #include "ConfigVarsLinker.h"
 
-#include "PrivateAccessor.h"
 #include "HAL/FileManagerGeneric.h"
+
+#include "PrivateAccessor.h"
+#include "ConfigVarsTypes.h"
+
+#include "ConfigVarsLinkerEditorData.h"
 
 PRIVATE_DEFINE_VAR(FLinkerLoad, TOptional<FStructuredArchive::FRecord>, StructuredArchiveRootRecord);
 
@@ -52,7 +56,7 @@ public:
 		OtherObj = (T*)Obj;
 	}
 
-	static void SerializeObject(FStructuredArchive::FRecord Record, UConfigVarsLinker * Linker, UObject * &Obj)
+	static void SerializeObject(FStructuredArchive::FRecord Record, UConfigVarsLinker* Linker, UObject * &Obj)
 	{
 		FArchive& Ar = Record.GetUnderlyingArchive();
 
@@ -130,7 +134,6 @@ FArchive& operator<<(FArchive& Ar, FConfigVarsExport& Export)
 }
 
 //////////////////////////////////////////////////////////////////////////
-
 void UConfigVarsLinker::Serialize(FStructuredArchive::FRecord Record)
 {
 	Super::Serialize(Record);
@@ -148,6 +151,7 @@ void UConfigVarsLinker::Serialize(FStructuredArchive::FRecord Record)
 		// 而FPackageHarvester不是我们的真正FileWriter的Ar，仅仅是记录一些额外的信息，例如引用到的FName。
 		if (!Ar.GetLinker() || Ar.IsCooking())
 		{
+			VerifyPendingRemovedExport();
 			VerifyAllExportLoaded();
 		}
 
@@ -170,6 +174,13 @@ void UConfigVarsLinker::Serialize(FStructuredArchive::FRecord Record)
 			ProcessPendingLoadExports(Record);
 		}
 	}
+
+#if WITH_EDITORONLY_DATA
+	if (!Ar.IsFilterEditorOnly())
+	{
+		Ar << LinkerEditorData;
+	}
+#endif
 }
 
 void UConfigVarsLinker::SerializeHeadData(FStructuredArchive::FRecord Record)
@@ -178,14 +189,32 @@ void UConfigVarsLinker::SerializeHeadData(FStructuredArchive::FRecord Record)
 
 	if (Ar.IsSaving())
 	{
+		// 序列化时必须确保LinkerEditorData存在
+		UConfigVarsLinkerEditorData* EditorData = GetLinkerEditorData();
+		if (!EditorData)
+		{
+			return;
+		}
+
 		ImportTable.Empty();
 		ExportTable.Empty();
 
 		int32 ExportObjectsNum = 0;
-		for (FInstancedStruct& Data : ExportData)
+
+		EditorData->ExportDataSerializeOrderSet.Empty();
+
+		// 先处理确定有序的ExportIndex。
+		for (int32 OrderIndex : EditorData->ExportDataOrderSet)
 		{
-			if (Data.IsValid())
+			++ExportObjectsNum;
+			EditorData->ExportDataSerializeOrderSet.Add(OrderIndex);
+		}
+
+		for (int32 index = 0; index < ExportData.Num(); ++index)
+		{
+			if (!EditorData->ExportDataSerializeOrderSet.Contains(index) && ExportData[index].IsValid())
 			{
+				EditorData->ExportDataSerializeOrderSet.Add(index);
 				++ExportObjectsNum;
 			}
 		}
@@ -215,15 +244,20 @@ void UConfigVarsLinker::SerializeExportData(FStructuredArchive::FRecord Record)
 
 	if (Ar.IsSaving())
 	{
+		// 序列化时必须确保LinkerEditorData存在
+		UConfigVarsLinkerEditorData* EditorData = GetLinkerEditorData();
+		if (!EditorData)
+		{
+			return;
+		}
+
 		int32 ExportDataSize = 0;
 		FSerialSizeScope Scope(Ar, ExportDataSize);	// ExportDataSize
 
-		for (FInstancedStruct& Data : ExportData)
+		// 此时所有ExportIndex都是有序的。
+		for (int32 OrderIndex : EditorData->ExportDataSerializeOrderSet)
 		{
-			if (Data.IsValid())
-			{
-				ExportStruct(Record, Data);
-			}
+			ExportStruct(Record, ExportData[OrderIndex]);
 		}
 	}
 	else if (Ar.IsLoading())
@@ -388,11 +422,35 @@ void UConfigVarsLinker::VerifyAllExportLoaded()
 		if (!bExportDataValid && ExportTable[Index].ClassIndex != INDEX_NONE)
 		{
 #if WITH_EDITOR
-			LoadOrAddData(Index, nullptr);
+			FConfigVarsBag Bag;
+			Bag.ExportIndex = Index;
+			LoadOrAddData(Bag, nullptr);
 #else
 			// LoadData 会走异步加载，Cook时不能使用
 			LoadData(Index);
 #endif
+		}
+	}
+}
+
+void UConfigVarsLinker::VerifyPendingRemovedExport()
+{
+	UConfigVarsLinkerEditorData* EditorData = GetLinkerEditorData();
+	if (!EditorData)
+	{
+		return;
+	}
+
+	for (int32 RemovedIndex : EditorData->PendingRemovedSet)
+	{
+		if (ExportTable.IsValidIndex(RemovedIndex))
+		{
+			ExportTable[RemovedIndex].ClassIndex = INDEX_NONE;
+		}
+
+		if (ExportData.IsValidIndex(RemovedIndex))
+		{
+			ExportData[RemovedIndex].Reset();
 		}
 	}
 }
@@ -700,6 +758,22 @@ void UConfigVarsLinker::LoadData_Async(int32 ExportIndex, FLoadConfigVarsAsyncDe
 	}
 }
 
+UConfigVarsLinkerEditorData* UConfigVarsLinker::GetLinkerEditorData()
+{
+#if WITH_EDITOR
+	if (IsValid(LinkerEditorData))
+	{
+		return LinkerEditorData;
+	}
+
+	LinkerEditorData = NewObject<UConfigVarsLinkerEditorData>(this);
+
+	return LinkerEditorData;
+#else
+	return nullptr;
+#endif
+}
+
 #if WITH_EDITOR
 FLinkerLoad* UConfigVarsLinker::CreateLinker_Sync()
 {
@@ -718,8 +792,12 @@ FLinkerLoad* UConfigVarsLinker::CreateLinker_Sync()
 	return Linker;
 }
 
-FStructView UConfigVarsLinker::LoadOrAddData(int32& InOutExportIndex, const UScriptStruct* TemplateDataStruct)
+FStructView UConfigVarsLinker::LoadOrAddData(FConfigVarsBag& ConfigVarsBag, const UScriptStruct* TemplateDataStruct)
 {
+	ConfigVarsBag.Outermost = GetPackage();
+	ConfigVarsBag.Linker = this;
+	int32& InOutExportIndex = ConfigVarsBag.ExportIndex;
+
 	if (InOutExportIndex != INDEX_NONE)
 	{
 		// 第二级，在本身的数组中寻找。
@@ -772,30 +850,84 @@ FStructView UConfigVarsLinker::LoadOrAddData(int32& InOutExportIndex, const UScr
 	// 第五级，重新创建
 	if (TemplateDataStruct)
 	{
-		ExportData.Emplace(TemplateDataStruct);
+		auto GetAvailableExportDataIndex= [this]() -> int32 {
+			UConfigVarsLinkerEditorData* EditorData = GetLinkerEditorData();
+			if (!EditorData)
+			{
+				return INDEX_NONE;
+			}
 
-		// Mark the package dirty...
-		GetPackage()->MarkPackageDirty();
+			if (!EditorData->PendingRemovedSet.IsEmpty())
+			{
+				auto FirstIt = EditorData->PendingRemovedSet.CreateIterator();
+				int32 AvailableIndex = *(FirstIt);
+				FirstIt.RemoveCurrent();
 
-		InOutExportIndex = ExportData.Num() - 1;
+				return AvailableIndex;
+			}
 
-		return ExportData.Last();
+			return INDEX_NONE;
+		};
+
+		InOutExportIndex = GetAvailableExportDataIndex();
+		if (InOutExportIndex != INDEX_NONE)
+		{
+			// 有空余就用空余。
+			ExportData[InOutExportIndex].InitializeAs(TemplateDataStruct);
+			return ExportData[InOutExportIndex];
+		}
+		else
+		{
+			// 没有可用的空间，则尝试额外分配。
+			ExportData.Emplace(TemplateDataStruct);
+
+			// Mark the package dirty...
+			GetPackage()->MarkPackageDirty();
+
+			InOutExportIndex = ExportData.Num() - 1;
+
+			return ExportData.Last();
+		}
 	}
 
 	return FStructView();
 }
 
-void UConfigVarsLinker::RemoveData(int32 ExportIndex)
+void UConfigVarsLinker::MarkPendingRemoved(int32 ExportIndex, bool bIsPendingRemoved)
 {
-	if (ExportData.IsValidIndex(ExportIndex))
+	if (GetLinkerEditorData())
 	{
-		ExportData[ExportIndex] = FInstancedStruct();
+		if (bIsPendingRemoved)
+		{
+			LinkerEditorData->PendingRemovedSet.Add(ExportIndex);
+
+			// 如果新增数据，则原有排序很可能不再紧凑，需要清空。
+			LinkerEditorData->ExportDataOrderSet.Empty();
+		}
+		else
+		{
+			LinkerEditorData->PendingRemovedSet.Remove(ExportIndex);
+		}
+	}
+}
+
+int32 UConfigVarsLinker::GetSerialExportIndex(int32 OldExportIndex)
+{
+	if (GetLinkerEditorData())
+	{
+		FSetElementId ElementId = LinkerEditorData->ExportDataOrderSet.FindId(OldExportIndex);
+		if (ElementId.IsValidId())
+		{
+			return ElementId.AsInteger();
+		}
+		else
+		{
+			LinkerEditorData->ExportDataOrderSet.Add(OldExportIndex);
+			return LinkerEditorData->ExportDataOrderSet.Num() - 1;
+		}
 	}
 
-	if (ExportTable.IsValidIndex(ExportIndex))
-	{
-		ExportTable[ExportIndex].ClassIndex = INDEX_NONE;
-	}
+	return INDEX_NONE;
 }
 #endif
 

@@ -12,6 +12,8 @@ typedef TMap<int32, UObject*> FImportObjectMap;
 
 DECLARE_DELEGATE_OneParam(FLoadConfigVarsAsyncDelegate, TArray<FStructView>);
 
+class UConfigVarsLinkerEditorData;
+
 struct FConfigVarsImport
 {
 	FConfigVarsImport() {}
@@ -66,7 +68,7 @@ struct FLoadedConfigVarsData
 };
 
 UCLASS()
-class UConfigVarsLinker : public UObject
+class CONFIGVARS_API UConfigVarsLinker : public UObject
 {
 	GENERATED_BODY()
 public:
@@ -78,14 +80,13 @@ public:
 	FStructView LoadData(int32 ExportIndex);
 	void LoadData_Async(int32 ExportIndex, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
 
-#if WITH_EDITOR
-	FStructView LoadOrAddData(int32& InOutExportIndex, const UScriptStruct* TemplateDataStruct);
-	void RemoveData(int32 ExportIndex);
-#endif
+	UConfigVarsLinkerEditorData* GetLinkerEditorData();
 
 private:
 	friend class FArchiveConfigVars;
 	friend class FConfigVarsUtils;
+	friend class FConfigVarsReaderUtils;
+	friend class FConfigVarsDetailUtils;
 
 	// 是否跳过反序列化
 	void SerializeHeadData(FStructuredArchive::FRecord Record);
@@ -114,6 +115,18 @@ private:
 
 	// 确保所有Export都被加载
 	void VerifyAllExportLoaded();
+	// 处理 PendingRemovedExportData
+	void VerifyPendingRemovedExport();
+
+#if WITH_EDITOR
+	FStructView LoadOrAddData(struct FConfigVarsBag& ConfigVarsBag, const UScriptStruct* TemplateDataStruct);
+	void MarkPendingRemoved(int32 ExportIndex, bool bIsPendingRemoved);
+	FLinkerLoad* CreateLinker_Sync();
+	int32 GetSerialExportIndex(int32 OldExportIndex);
+#endif
+
+	// ExportTable和ImportTable是一种优化后的序列化数据。（所以ExportTable这些数据会丢弃不必要的信息，在编辑时，与ExportData不一定相对应）
+	// ExportData是未优化的待序列化数据和优化后的反序列化数据。
 
 	// Runtime时，不能再手动修改ImportTable和ExportTable，否则存在线程风险
 	TArray<FConfigVarsImport> ImportTable;
@@ -134,8 +147,9 @@ private:
 	TMap<FGuid, int32> LoadingImportCounter;
 	// -----------------------------------------------------------------------------------
 
-#if WITH_EDITOR
-	FLinkerLoad* CreateLinker_Sync();
+#if WITH_EDITORONLY_DATA
+	UPROPERTY(Transient)
+	UConfigVarsLinkerEditorData* LinkerEditorData = nullptr;
 #endif
 
 };
