@@ -503,7 +503,7 @@ int32 UConfigVarsLinker::LoadImport_Async(int32 ExportIndex, FLoadPackageAsyncDe
 	return LoadPackageAsync(Import.ObjectPath.GetAssetPath().GetPackageName().ToString(), CallBack, Priority, PKG_None, PIEInstanceID);
 }
 
-void UConfigVarsLinker::PushToPendingLoadExports(const TArray<int32>& ExportIndexs)
+void UConfigVarsLinker::PushToPendingLoadExports(TArrayView<int32> ExportIndexs)
 {
 	for (auto Index : ExportIndexs)
 	{
@@ -565,7 +565,7 @@ void UConfigVarsLinker::LoadExports_Sync(TArray<int32> ExportIndexs, TArray<FStr
 	}
 }
 
-void UConfigVarsLinker::LoadExports_Async_Request(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority)
+void UConfigVarsLinker::LoadExports_Async_Request(TArrayView<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority, int32 BatchNum /* = 1 */)
 {
 	if (ExportIndexs.IsEmpty())
 	{
@@ -574,12 +574,27 @@ void UConfigVarsLinker::LoadExports_Async_Request(TArray<int32> ExportIndexs, FL
 		return;
 	}
 
-	PushToPendingLoadExports(ExportIndexs);
+	if (BatchNum == 1)
+	{
+		LoadExports_Async_LoadImports(ExportIndexs, CallBack, Priority);
+	}
+	else if (BatchNum > 1)
+	{
+		int32 index = 0;
+		int32 ElementNum = ExportIndexs.Num();
+		int32 BatchElementNum = ElementNum / BatchNum;
+		while (index < ElementNum)
+		{
+			int32 SliceNum = FMath::Min(BatchElementNum, ElementNum - index);
+			TArrayView BatchExport = ExportIndexs.Slice(index, SliceNum);
+			LoadExports_Async_LoadImports(BatchExport, CallBack, Priority);
 
-	LoadExports_Async_LoadImports(ExportIndexs, CallBack, Priority);
+			index += BatchElementNum;
+		}
+	}
 }
 
-void UConfigVarsLinker::LoadExports_Async_LoadImports(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority)
+void UConfigVarsLinker::LoadExports_Async_LoadImports(TArrayView<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority)
 {
 	FLoadPackageAsyncDelegate LoadPackageAsyncDelegate;
 	FGuid CounterID;
@@ -642,7 +657,7 @@ void UConfigVarsLinker::LoadExports_Async_LoadImports(TArray<int32> ExportIndexs
 	}
 }
 
-void UConfigVarsLinker::LoadExports_Async_LoadExports(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority)
+void UConfigVarsLinker::LoadExports_Async_LoadExports(TArrayView<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority)
 {
 	UPackage* Package = GetPackage();
 	EObjectFlags ReLoadFlags = RF_Public | RF_NeedPostLoad | RF_NeedPostLoadSubobjects | RF_WillBeLoaded;
@@ -654,6 +669,8 @@ void UConfigVarsLinker::LoadExports_Async_LoadExports(TArray<int32> ExportIndexs
 	this->SetFlags(ReLoadFlags);
 
 	constexpr int32 PIEInstanceID = INDEX_NONE;
+
+	PushToPendingLoadExports(ExportIndexs);
 
 	LoadPackageAsync(Package->GetLoadedPath(), Package->GetFName(), FLoadPackageAsyncDelegate::CreateWeakLambda(this, [this, ExportIndexs, CallBack](const FName&, UPackage*, EAsyncLoadingResult::Type Result) {
 		TArray<FStructView> OutExportData;
@@ -754,7 +771,8 @@ void UConfigVarsLinker::LoadData_Async(int32 ExportIndex, FLoadConfigVarsAsyncDe
 	/************************************************************************/
 	if (Export.ClassIndex != INDEX_NONE)
 	{
-		LoadExports_Async_Request({ ExportIndex }, CallBack, Priority);
+		TArray<int32> RequestExportIndexs = { ExportIndex };
+		LoadExports_Async_Request(RequestExportIndexs, CallBack, Priority);
 	}
 }
 

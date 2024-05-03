@@ -98,7 +98,7 @@ private:
 
 	// 真正反序列化Export数据
 	void ProcessPendingLoadExports(FStructuredArchive::FRecord Record);
-	void PushToPendingLoadExports(const TArray<int32>& ExportIndexs);
+	void PushToPendingLoadExports(TArrayView<int32> ExportIndexs);
 	
 	// 同步加载Imports（批量加载可以起到优化作用）
 	void LoadImports_Sync(TArray<int32> ExportIndexs);
@@ -109,9 +109,9 @@ private:
 	int32 LoadImport_Async(int32 ExportIndex, FLoadPackageAsyncDelegate CallBack, int32 Priority);
 
 	// 异步加载Exports（批量加载可以起到优化作用）
-	void LoadExports_Async_Request(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
-	void LoadExports_Async_LoadImports(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
-	void LoadExports_Async_LoadExports(TArray<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
+	void LoadExports_Async_Request(TArrayView<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority, int32 BatchNum = 1);
+	void LoadExports_Async_LoadImports(TArrayView<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
+	void LoadExports_Async_LoadExports(TArrayView<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
 
 	// 确保所有Export都被加载
 	void VerifyAllExportLoaded();
