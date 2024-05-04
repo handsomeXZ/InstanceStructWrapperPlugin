@@ -12,8 +12,7 @@ class UConfigVarsLinkerEditorData : public UObject
 	GENERATED_BODY()
 public:
 
-	// 用于确保序列化时，ExportData有序紧凑。
-	UPROPERTY()
+	// 用于确保序列化时，ExportData有序紧凑，在新增ArrayItem时会被重置。
 	TSet<int32> ExportDataOrderSet;
 
 	// 用于记录已经确定的序列化顺序，仅当次序列化时有效。

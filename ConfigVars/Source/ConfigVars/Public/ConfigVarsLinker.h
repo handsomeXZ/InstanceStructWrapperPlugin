@@ -75,7 +75,7 @@ public:
 	virtual void Serialize(FStructuredArchive::FRecord Record) override final;
 
 	// 序列化为Import（这里记录的ImportObject，仅会在对应的ExportObject加载前才会被加载）
-	int32 ImportObject(class UObject* ImportObj);
+	int32 ImportObject(const UObject* ImportObj);
 
 	FStructView LoadData(int32 ExportIndex);
 	void LoadData_Async(int32 ExportIndex, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
@@ -98,7 +98,7 @@ private:
 
 	// 真正反序列化Export数据
 	void ProcessPendingLoadExports(FStructuredArchive::FRecord Record);
-	void PushToPendingLoadExports(TArrayView<int32> ExportIndexs);
+	void PushToPendingLoadExports(TConstArrayView<int32> ExportIndexs);
 	
 	// 同步加载Imports（批量加载可以起到优化作用）
 	void LoadImports_Sync(TArray<int32> ExportIndexs);
@@ -109,9 +109,9 @@ private:
 	int32 LoadImport_Async(int32 ExportIndex, FLoadPackageAsyncDelegate CallBack, int32 Priority);
 
 	// 异步加载Exports（批量加载可以起到优化作用）
-	void LoadExports_Async_Request(TArrayView<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority, int32 BatchNum = 1);
-	void LoadExports_Async_LoadImports(TArrayView<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
-	void LoadExports_Async_LoadExports(TArrayView<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
+	void LoadExports_Async_Request(TConstArrayView<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority, int32 BatchNum = 1);
+	void LoadExports_Async_LoadImports(TConstArrayView<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
+	void LoadExports_Async_LoadExports(TConstArrayView<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
 
 	// 确保所有Export都被加载
 	void VerifyAllExportLoaded();
@@ -122,8 +122,8 @@ private:
 	FStructView LoadOrAddData(struct FConfigVarsBag& ConfigVarsBag, const UScriptStruct* TemplateDataStruct);
 	void MarkPendingRemoved(int32 ExportIndex, bool bIsPendingRemoved);
 	FLinkerLoad* CreateLinker_Sync();
-	int32 GetSerialExportIndex(int32 OldExportIndex);
 #endif
+	int32 GetSerialExportIndex(int32 OldExportIndex);
 
 	// ExportTable和ImportTable是一种优化后的序列化数据。（所以ExportTable这些数据会丢弃不必要的信息，在编辑时，与ExportData不一定相对应）
 	// ExportData是未优化的待序列化数据和优化后的反序列化数据。
@@ -136,9 +136,10 @@ private:
 	TArray<FInstancedStruct> ExportData;
 
 	// -----------------------------------------------------------------------------------
-	// 用于存储待反序列化的Export队列。
+	// 用于存储待反序列化的ExportIndex队列。
 	TLockFreePointerListFIFO<void, PLATFORM_CACHE_LINE_SIZE> PendingLoadExports_Async;
 
+	// 用于存储已经被反序列化的ExportData队列
 	TLockFreePointerListFIFO<FLoadedConfigVarsData, PLATFORM_CACHE_LINE_SIZE> LoadedConfigVarsDatas_Async;
 	// ExportData的写入仅发生在游戏线程，在其他线程的读取需要加锁。
 	FCriticalSection ExportDataCritical;
