@@ -22,7 +22,7 @@ public:
 	virtual ~FConfigVarsBag() {}
 
 	FConstStructView LoadData(UObject* Outer) const;
-	void LoadData_Async(UObject* Outer, FOnConfigVarsAsyncCallBack CallBack, int32 Priority = DefaultAsyncLoadPriority) const;
+	void LoadData_Async(UObject* Outer, int32 Priority = DefaultAsyncLoadPriority) const;
 	bool IsValid() const { return ExportIndex != INDEX_NONE; }
 
 	bool Serialize(FArchive& Ar);

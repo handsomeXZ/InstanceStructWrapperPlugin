@@ -60,9 +60,9 @@ DEFINE_FUNCTION(UConfigVarsBagReader::execGetValue)
 	}
 }
 
-void UConfigVarsBagReader::LoadData_Async(UObject* Outer, FConfigVarsBag ConfigVarsBag, FOnConfigVarsAsyncCallBack CallBack, int32 Priority)
+void UConfigVarsBagReader::LoadData_Async(UObject* Outer, FConfigVarsBag ConfigVarsBag, int32 Priority)
 {
-	ConfigVarsBag.LoadData_Async(Outer, CallBack, Priority);
+	ConfigVarsBag.LoadData_Async(Outer, Priority);
 }
 
 #undef LOCTEXT_NAMESPACE

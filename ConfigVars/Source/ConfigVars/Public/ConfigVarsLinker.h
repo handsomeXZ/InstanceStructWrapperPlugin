@@ -9,6 +9,8 @@
 #include "ConfigVarsLinker.generated.h"
 
 typedef TMap<int32, UObject*> FImportObjectMap;
+#define MAX_EXPORTINDEX 0xfffeui16	// 65534
+#define OVER_EXPORTINDEX 0xffffui16	// 65535
 
 DECLARE_DELEGATE_OneParam(FLoadConfigVarsAsyncDelegate, TArray<FStructView>);
 
@@ -78,7 +80,7 @@ public:
 	int32 ImportObject(const UObject* ImportObj);
 
 	FStructView LoadData(int32 ExportIndex);
-	void LoadData_Async(int32 ExportIndex, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
+	void LoadData_Async(int32 ExportIndex, int32 Priority);
 
 	UConfigVarsLinkerEditorData* GetLinkerEditorData();
 
@@ -98,20 +100,20 @@ private:
 
 	// 真正反序列化Export数据
 	void ProcessPendingLoadExports(FStructuredArchive::FRecord Record);
-	void PushToPendingLoadExports(TConstArrayView<int32> ExportIndexs);
+	void PushToPendingLoadExports(uint16 ExportIndexBegin, uint16 ExportIndexEnd);
 	
 	// 同步加载Imports（批量加载可以起到优化作用）
-	void LoadImports_Sync(TArray<int32> ExportIndexs);
+	void LoadImports_Sync(uint16 ExportIndexBegin, uint16 ExportIndexEnd);
 	// 同步加载Exports（批量加载可以起到优化作用）
-	void LoadExports_Sync(TArray<int32> ExportIndexs, TArray<FStructView>& OutExportData);
+	void LoadExports_Sync(uint16 ExportIndexBegin, uint16 ExportIndexEnd, TArray<FStructView>& OutExportData);
 
 	// 异步加载Import（非批量）
-	int32 LoadImport_Async(int32 ExportIndex, FLoadPackageAsyncDelegate CallBack, int32 Priority);
+	int32 LoadImport_Async(int32 ExportIndex, FLoadPackageAsyncDelegate LoadPackageAsyncDelegate, int32 Priority);
 
 	// 异步加载Exports（批量加载可以起到优化作用）
-	void LoadExports_Async_Request(TConstArrayView<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority, int32 BatchNum = 1);
-	void LoadExports_Async_LoadImports(TConstArrayView<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
-	void LoadExports_Async_LoadExports(TConstArrayView<int32> ExportIndexs, FLoadConfigVarsAsyncDelegate CallBack, int32 Priority);
+	void LoadExports_Async_Request(uint16 ExportIndexBegin, uint16 ExportIndexEnd, int32 Priority);
+	void LoadExports_Async_LoadImports(uint16 ExportIndexBegin, uint16 ExportIndexEnd, int32 Priority);
+	void LoadExports_Async_LoadExports(uint16 ExportIndexBegin, uint16 ExportIndexEnd, int32 Priority);
 
 	// 确保所有Export都被加载
 	void VerifyAllExportLoaded();
@@ -124,6 +126,9 @@ private:
 	FLinkerLoad* CreateLinker_Sync();
 #endif
 	int32 GetSerialExportIndex(int32 OldExportIndex);
+
+	void AddAsyncLoadFlag();
+	void ClearAsyncLoadFlag();
 
 	// ExportTable和ImportTable是一种优化后的序列化数据。（所以ExportTable这些数据会丢弃不必要的信息，在编辑时，与ExportData不一定相对应）
 	// ExportData是未优化的待序列化数据和优化后的反序列化数据。
@@ -146,6 +151,9 @@ private:
 
 	// Import 依赖加载的计数器
 	TMap<FGuid, int32> LoadingImportCounter;
+
+	// 受限于AsyncPackage，所有异步加载请求都会变成最后一次请求的优先级。
+	int32 LastAsyncLoadPriority = 0;
 	// -----------------------------------------------------------------------------------
 
 #if WITH_EDITORONLY_DATA

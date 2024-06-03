@@ -72,19 +72,15 @@ FConstStructView FConfigVarsBag::LoadData(UObject* Outer) const
 	return FConstStructView();
 }
 
-void FConfigVarsBag::LoadData_Async(UObject* Outer, FOnConfigVarsAsyncCallBack CallBack, int32 Priority) const
+void FConfigVarsBag::LoadData_Async(UObject* Outer, int32 Priority) const
 {
 	if (!Outer)
 	{
-		TArray<FInstancedStruct> NullData;
-		CallBack.ExecuteIfBound(NullData);
 		return;
 	}
 
 	if (ExportIndex == INDEX_NONE)	// ExportIndex不存在，不可能找到记录，直接退出
 	{
-		TArray<FInstancedStruct> NullData;
-		CallBack.ExecuteIfBound(NullData);
 		return;
 	}
 
@@ -94,15 +90,6 @@ void FConfigVarsBag::LoadData_Async(UObject* Outer, FOnConfigVarsAsyncCallBack C
 	UConfigVarsLinker* ConfigVarsLinker = FindObject<UConfigVarsLinker>(Package, TEXT("ConfigVarsLinker"));
 	if (ConfigVarsLinker)
 	{
-		ConfigVarsLinker->LoadData_Async(ExportIndex, FLoadConfigVarsAsyncDelegate::CreateWeakLambda(Outer, [Package, ExportIndex = ExportIndex, CallBack](TArray<FStructView> OutExportData) {
-			TArray<FInstancedStruct> OutStructData;
-			OutStructData.Empty(OutExportData.Num());
-			for (FStructView Data : OutExportData)
-			{
-				OutStructData.Emplace(Data);
-			}
-			CallBack.ExecuteIfBound(OutStructData);
-			})
-			, Priority);
+		ConfigVarsLinker->LoadData_Async(ExportIndex, Priority);
 	}
 }

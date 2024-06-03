@@ -7,7 +7,6 @@
 
 #include "ConfigVarsReader.generated.h"
 
-class FOnConfigVarsAsyncCallBack;
 
 UCLASS()
 class CONFIGVARS_API UConfigVarsBagReader : public UBlueprintFunctionLibrary
@@ -18,7 +17,7 @@ public:
 	static void GetValue(EStructUtilsResult& ExecResult, UObject* Outer, UPARAM(Ref) const FConfigVarsBag& ConfigVarsBag, int32& Value);
 
 	UFUNCTION(BlueprintCallable, Category = "ConfigVarsData")
-	static void LoadData_Async(UObject* Outer, FConfigVarsBag ConfigVarsBag, FOnConfigVarsAsyncCallBack CallBack, int32 Priority);
+	static void LoadData_Async(UObject* Outer, FConfigVarsBag ConfigVarsBag, int32 Priority);
 private:
 	DECLARE_FUNCTION(execGetValue);
 };
