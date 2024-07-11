@@ -1,4 +1,4 @@
-#include "ConfigVarsLinker.h"
+﻿#include "ConfigVarsLinker.h"
 
 #include "HAL/FileManagerGeneric.h"
 
@@ -150,8 +150,6 @@ FArchive& operator<<(FArchive& Ar, FConfigVarsExport& Export)
 //////////////////////////////////////////////////////////////////////////
 void UConfigVarsLinker::Serialize(FStructuredArchive::FRecord Record)
 {
-	Super::Serialize(Record);
-
 	FArchive& Ar = Record.GetUnderlyingArchive();
 
 	if (Ar.IsSaving())
@@ -168,7 +166,12 @@ void UConfigVarsLinker::Serialize(FStructuredArchive::FRecord Record)
 			VerifyPendingRemovedExport();
 			VerifyAllExportLoaded();
 		}
+	}
 
+	Super::Serialize(Record);
+
+	if (Ar.IsSaving())
+	{
 		SerializeHeadData(Record);
 		SerializeExportData(Record);
 		SerializeTableData(Record);
@@ -178,7 +181,7 @@ void UConfigVarsLinker::Serialize(FStructuredArchive::FRecord Record)
 	{
 		if (PendingLoadExports_Async.IsEmpty())
 		{
-			// 仅编辑器的同步加载 LoadOrAddData() 会走这里
+			// 仅第一次加载Linker 和 编辑器的同步加载 LoadOrAddData() 会走这里
 			SerializeHeadData(Record);
 			SerializeExportData(Record);
 			SerializeTableData(Record);
@@ -195,6 +198,16 @@ void UConfigVarsLinker::Serialize(FStructuredArchive::FRecord Record)
 		Ar << LinkerEditorData;
 	}
 #endif
+}
+
+bool UConfigVarsLinker::Rename(const TCHAR* NewName /* = nullptr */, UObject* NewOuter /* = nullptr */, ERenameFlags Flags /* = REN_None */)
+{
+#if WITH_EDITOR
+	//LinkerEditorData = nullptr;
+#endif
+	bool bSuccess = Super::Rename(NewName, NewOuter, Flags);
+
+	return bSuccess;
 }
 
 void UConfigVarsLinker::SerializeHeadData(FStructuredArchive::FRecord Record)
@@ -409,7 +422,7 @@ void UConfigVarsLinker::ExportStruct(FStructuredArchive::FRecord Record, FStruct
 
 	FConfigVarsExport& Export = ExportTable.AddDefaulted_GetRef();
 	Export.SerialLocation = InitialOffset;
-	Export.ClassIndex = ImportTable.Num();
+	Export.ClassIndex = ImportObject(StructData.GetScriptStruct());
 
 	if (FinalImportNum > InitialImportNum)
 	{
@@ -417,7 +430,6 @@ void UConfigVarsLinker::ExportStruct(FStructuredArchive::FRecord Record, FStruct
 		Export.ImportSet.AddRange(InitialImportNum, FinalImportNum - 1);
 	}
 
-	ImportObject(StructData.GetScriptStruct());
 }
 
 void UConfigVarsLinker::VerifyAllExportLoaded()
@@ -811,6 +823,8 @@ UConfigVarsLinkerEditorData* UConfigVarsLinker::GetLinkerEditorData()
 	}
 
 	LinkerEditorData = NewObject<UConfigVarsLinkerEditorData>(this);
+	LinkerEditorData->SetFlags(RF_Transient);
+	LinkerEditorData->Rename(nullptr, this, REN_DontCreateRedirectors | REN_NonTransactional | REN_ForceNoResetLoaders);
 
 	return LinkerEditorData;
 #else
@@ -845,7 +859,7 @@ FStructView UConfigVarsLinker::LoadOrAddData(FConfigVarsBag& ConfigVarsBag, cons
 	if (InOutExportIndex != INDEX_NONE)
 	{
 		// 第二级，在本身的数组中寻找。
-		if (ExportData[InOutExportIndex].IsValid())
+		if (ExportData.IsValidIndex(InOutExportIndex) && ExportData[InOutExportIndex].IsValid())
 		{
 			return ExportData[InOutExportIndex];
 		}
@@ -904,7 +918,7 @@ FStructView UConfigVarsLinker::LoadOrAddData(FConfigVarsBag& ConfigVarsBag, cons
 			if (!EditorData->PendingRemovedSet.IsEmpty())
 			{
 				auto FirstIt = EditorData->PendingRemovedSet.CreateIterator();
-				int32 AvailableIndex = *(FirstIt);
+				int32 AvailableIndex = *FirstIt;
 				FirstIt.RemoveCurrent();
 
 				return AvailableIndex;
@@ -951,6 +965,14 @@ void UConfigVarsLinker::MarkPendingRemoved(int32 ExportIndex, bool bIsPendingRem
 		else
 		{
 			LinkerEditorData->PendingRemovedSet.Remove(ExportIndex);
+			ClearFlags(RF_Transient);
+			SetFlags(RF_Public | RF_Standalone);
+		}
+
+		if (LinkerEditorData->PendingRemovedSet.Num() == ExportData.Num())
+		{
+			ClearFlags(RF_Public | RF_Standalone);
+			SetFlags(RF_Transient);
 		}
 	}
 }
@@ -1125,7 +1147,12 @@ void FConfigVarsUtils::SerializeProperties(FStructuredArchive::FRecord ExportRec
 				}
 				else if (ChildProperty->GetID() != PropertyType)
 				{
-					UE_LOG(LogConfigVarsLinker, Warning, TEXT("Type mismatch in %s of %s - Previous (%s) Current(%s) for package:  %s"), *PropertyName.ToString(), *DataStruct->GetName(), *PropertyType.ToString(), *ChildProperty->GetID().ToString());
+					FString PackageName = TEXT("unkown Package");
+					if (Linker->GetPackage())
+					{
+						Linker->GetPackage()->GetName(PackageName);
+					}
+					UE_LOG(LogConfigVarsLinker, Warning, TEXT("Type mismatch in %s of %s - Previous (%s) Current(%s) for package:  %s"), *PropertyName.ToString(), *DataStruct->GetName(), *PropertyType.ToString(), *ChildProperty->GetID().ToString(), *PackageName);
 
 					PropertyArchive.Seek(InitialOffset + PropertySize);
 					continue;

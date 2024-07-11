@@ -1,9 +1,10 @@
-#include "ConfigVarsReader.h"
+﻿#include "ConfigVarsReader.h"
 
 #include "UObject/Package.h"
 #include "UObject/ObjectResource.h"
 #include "UObject/UObjectGlobals.h"
 #include "StructUtilsFunctionLibrary.h"
+#include "Blueprint/BlueprintExceptionInfo.h"
 
 #include "ConfigVarsLinker.h"
 

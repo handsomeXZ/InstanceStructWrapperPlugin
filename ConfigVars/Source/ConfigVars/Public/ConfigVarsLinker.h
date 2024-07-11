@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 
@@ -75,6 +75,7 @@ class CONFIGVARS_API UConfigVarsLinker : public UObject
 	GENERATED_BODY()
 public:
 	virtual void Serialize(FStructuredArchive::FRecord Record) override final;
+	virtual bool Rename(const TCHAR* NewName = nullptr, UObject* NewOuter = nullptr, ERenameFlags Flags = REN_None) override;
 
 	// 序列化为Import（这里记录的ImportObject，仅会在对应的ExportObject加载前才会被加载）
 	int32 ImportObject(const UObject* ImportObj);
@@ -115,10 +116,10 @@ private:
 	void LoadExports_Async_LoadImports(uint16 ExportIndexBegin, uint16 ExportIndexEnd, int32 Priority);
 	void LoadExports_Async_LoadExports(uint16 ExportIndexBegin, uint16 ExportIndexEnd, int32 Priority);
 
-	// 确保所有Export都被加载
-	void VerifyAllExportLoaded();
 	// 处理 PendingRemovedExportData
 	void VerifyPendingRemovedExport();
+	// 确保所有Export都被加载
+	void VerifyAllExportLoaded();
 
 #if WITH_EDITOR
 	FStructView LoadOrAddData(struct FConfigVarsBag& ConfigVarsBag, const UScriptStruct* TemplateDataStruct);

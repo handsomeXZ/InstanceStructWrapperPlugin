@@ -1,4 +1,4 @@
-#include "ConfigVarsTypes.h"
+﻿#include "ConfigVarsTypes.h"
 
 #include "ConfigVarsLinker.h"
 
@@ -16,7 +16,7 @@ public:
 				return;
 			}
 
-			// 我们不希望在序列化时修改OldExportIndex，因为会导致异常。
+			// 我们不希望在反序列化时修改OldExportIndex，因为会导致异常。
 			int32 TempIndex = Linker->GetSerialExportIndex(OldExportIndex);
 
 			Ar << TempIndex;

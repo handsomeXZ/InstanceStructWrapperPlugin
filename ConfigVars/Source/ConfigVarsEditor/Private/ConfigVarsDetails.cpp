@@ -1,4 +1,4 @@
-#include "ConfigVarsDetails.h"
+﻿#include "ConfigVarsDetails.h"
 
 #include "ConfigVarsLinker.h"
 #include "ConfigVarsReader.h"
@@ -221,7 +221,7 @@ public:
 		return CommonStruct;
 	}
 
-	virtual void GetInstances(TArray<TSharedPtr<FStructOnScope>>& OutInstances) const override
+	virtual void GetInstances(TArray<TSharedPtr<FStructOnScope>>& OutInstances, const UStruct* ExpectedBaseStructure) const override
 	{
 		// The returned instances need to be compatible with base structure.
 		// This function returns empty instances in case they are not compatible, with the idea that we have as many instances as we have outer objects.
@@ -404,10 +404,10 @@ void FConfigVarsDetails::CustomizeHeader(TSharedRef<IPropertyHandle> StructPrope
 	StructPropertyHandle->GetOuterPackages(Packages);
 
 	ViewModel = MakeShared<FConfigVarsViewModel>(StructPropertyHandle);
-	ViewModel->Init();
 
 	// 非事务，不允许撤回
-	StructPropertyHandle->EnumerateRawData([&Packages, ViewModel = ViewModel, ConfigVarsDataStruct](void* RawData, const int32 DataIndex, const int32 /*NumDatas*/)
+	FStructView ConfigVarsDataCache;
+	StructPropertyHandle->EnumerateRawData([&Packages, &ConfigVarsDataCache, ConfigVarsDataStruct](void* RawData, const int32 DataIndex, const int32 /*NumDatas*/)
 	{
 		FConfigVarsBag* Bag = static_cast<FConfigVarsBag*>(RawData);
 		if (Bag)
@@ -418,11 +418,16 @@ void FConfigVarsDetails::CustomizeHeader(TSharedRef<IPropertyHandle> StructPrope
 				{
 					return false;
 				}
-				ViewModel->ConfigVarsDataCache = FConfigVarsDetailUtils::LoadOrAddData(Packages[DataIndex], Bag, ConfigVarsDataStruct);
+				ConfigVarsDataCache = FConfigVarsDetailUtils::LoadOrAddData(Packages[DataIndex], Bag, ConfigVarsDataStruct);
 			}
 		}
 		return true;
 	});
+
+
+	ViewModel->Init();
+	ViewModel->ConfigVarsDataCache = ConfigVarsDataCache;
+
 
 	StructPropertyHandle->GetParentHandle()->SetOnPropertyValueChangedWithData(TDelegate<void(const FPropertyChangedEvent&)>::CreateSP(this, &FConfigVarsDetails::OnPropertyValueChangedWithData));
 	StructPropertyHandle->GetParentHandle()->SetOnChildPropertyValueChangedWithData(TDelegate<void(const FPropertyChangedEvent&)>::CreateSP(this, &FConfigVarsDetails::OnPropertyValueChangedWithData));
