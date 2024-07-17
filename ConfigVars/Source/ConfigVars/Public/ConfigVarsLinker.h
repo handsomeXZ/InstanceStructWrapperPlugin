@@ -36,6 +36,7 @@ struct FConfigVarsExport
 	FConfigVarsExport()
 		: SerialLocation(0)
 		, ClassIndex(INDEX_NONE)
+		, Depth(0)
 		, ImportSet(0)
 	{}
 
@@ -50,6 +51,12 @@ struct FConfigVarsExport
 	 * Location of the resource for this export's class (if non-zero).
 	 */
 	int32  			ClassIndex;
+
+
+	/**
+	 * 服务于ConfigVars嵌套，最外层永远为1.
+	 */
+	uint8			Depth;
 
 
 	FBitArray		ImportSet;
@@ -69,6 +76,15 @@ struct FLoadedConfigVarsData
 	FInstancedStruct Data;
 };
 
+enum EConfigVarsSerialStage : uint8
+{
+	None            = 0,
+	Cooking			= 1 << 1,
+	PreSerialize	= 1 << 2,
+	Serialize		= 1 << 3,
+};
+ENUM_CLASS_FLAGS(EConfigVarsSerialStage);
+
 UCLASS()
 class CONFIGVARS_API UConfigVarsLinker : public UObject
 {
@@ -82,10 +98,14 @@ public:
 
 	FStructView LoadData(int32 ExportIndex);
 	void LoadData_Async(int32 ExportIndex, int32 Priority);
+	void LoadData_Multi_Async(int32 BeginExportIndex, int32 EndExportIndex, int32 Priority);
+	// 加载嵌套的懒加载块，Depth为深度，Depth = -1时，加载当前数据块下的所有嵌套数据块
+	void LoadData_Nested_Async(int32 ExportIndex, int32 Priority);
 
 	UConfigVarsLinkerEditorData* GetLinkerEditorData();
 
 private:
+	friend struct FConfigVarsBag;
 	friend class FArchiveConfigVars;
 	friend class FConfigVarsUtils;
 	friend class FConfigVarsReaderUtils;
@@ -116,13 +136,17 @@ private:
 	void LoadExports_Async_LoadImports(uint16 ExportIndexBegin, uint16 ExportIndexEnd, int32 Priority);
 	void LoadExports_Async_LoadExports(uint16 ExportIndexBegin, uint16 ExportIndexEnd, int32 Priority);
 
+	// 序列化前预处理数据
+	void VerifyData(FArchive& Ar, EConfigVarsSerialStage Stage, TFunction<void()> Func);
 	// 处理 PendingRemovedExportData
 	void VerifyPendingRemovedExport();
 	// 确保所有Export都被加载
 	void VerifyAllExportLoaded();
+	// 处理嵌套的数据
+	void VerifyNestedData(FArchive& Ar, int32 ExportIndex);
 
 #if WITH_EDITOR
-	FStructView LoadOrAddData(struct FConfigVarsBag& ConfigVarsBag, const UScriptStruct* TemplateDataStruct);
+	FStructView LoadOrAddData(struct FConfigVarsBag& ConfigVarsBag, const UScriptStruct* TemplateDataStruct, UObject* Outermost);
 	void MarkPendingRemoved(int32 ExportIndex, bool bIsPendingRemoved);
 	FLinkerLoad* CreateLinker_Sync();
 #endif
@@ -160,6 +184,8 @@ private:
 #if WITH_EDITORONLY_DATA
 	UPROPERTY(Transient)
 	UConfigVarsLinkerEditorData* LinkerEditorData = nullptr;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UObject>> ExportDataOuter;
 #endif
 
 };

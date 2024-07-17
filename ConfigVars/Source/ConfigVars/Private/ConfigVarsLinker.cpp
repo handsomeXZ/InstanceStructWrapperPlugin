@@ -8,19 +8,22 @@
 #include "ConfigVarsLinkerEditorData.h"
 
 PRIVATE_DEFINE_VAR(FLinkerLoad, TOptional<FStructuredArchive::FRecord>, StructuredArchiveRootRecord);
+PRIVATE_DEFINE_VAR(FConfigVarsBag, int32, ExportIndex);
 
 DEFINE_LOG_CATEGORY_STATIC(LogConfigVarsLinker, Log, All);
 
 namespace LinkerUtils
 {
 
-	int32 IndexRangeToBegin(void* IndexRange) {
+	uint16 IndexRangeToBegin(void* IndexRange) {
 		// 传入时即为int32，所以可以直接无视warning
-		return (static_cast<uint32>( (uint64)IndexRange & 0xFFFFFFFF ) >> 16) - 1;
+		uint32 Range = (uint64)(IndexRange);
+		return ((Range & 0xFFFF0000) >> 16) - 1;
 	}
-	int32 IndexRangeToEnd(void* IndexRange) {
+	uint16 IndexRangeToEnd(void* IndexRange) {
 		// 传入时即为int32，所以可以直接无视warning
-		return static_cast<uint32>((uint64)IndexRange & 0xFFFFFFFF ) - 1;
+		uint32 Range = (uint64)(IndexRange);
+		return (Range & 0x0000FFFF ) - 1;
 	}
 
 }
@@ -130,6 +133,11 @@ public:
 
 	template<typename SrcType>
 	static void SerializeItem(FStructuredArchive::FRecord PropertyRecord, FProperty* ChildProperty, UConfigVarsLinker* Linker, SrcType* SrcData);
+
+	template<typename SrcType>
+	static void VerifyNestedDataStruct(FArchive& Ar, UConfigVarsLinker* Linker, const UStruct* DataStruct, SrcType* SrcData, int32 Depth);
+	template<typename SrcType>
+	static void VerifyNestedDataProperties(FArchive& Ar, UConfigVarsLinker* Linker, FProperty* ChildProperty, SrcType* SrcData, int32 Depth);
 };
 
 FArchive& operator<<(FArchive& Ar, FConfigVarsImport& Import)
@@ -142,6 +150,7 @@ FArchive& operator<<(FArchive& Ar, FConfigVarsExport& Export)
 {
 	Ar << Export.SerialLocation;
 	Ar << Export.ClassIndex;
+	Ar << Export.Depth;
 	Ar << Export.ImportSet;
 
 	return Ar;
@@ -159,13 +168,12 @@ void UConfigVarsLinker::Serialize(FStructuredArchive::FRecord Record)
 			//return;
 		}
 
-		// 只有FLinkerLoad or FLinkerSave可以取到Linker。
-		// 而FPackageHarvester不是我们的真正FileWriter的Ar，仅仅是记录一些额外的信息，例如引用到的FName。
-		if (!Ar.GetLinker() || Ar.IsCooking())
-		{
-			VerifyPendingRemovedExport();
-			VerifyAllExportLoaded();
-		}
+		VerifyData(Ar, Cooking | PreSerialize,
+			[this](){
+				VerifyPendingRemovedExport();
+				VerifyAllExportLoaded();
+			}
+		);
 	}
 
 	Super::Serialize(Record);
@@ -223,13 +231,31 @@ void UConfigVarsLinker::SerializeHeadData(FStructuredArchive::FRecord Record)
 			return;
 		}
 
-		ImportTable.Empty();
-		ExportTable.Empty();
-
 		int32 ExportObjectsNum = 0;
 
 		EditorData->ExportDataSerializeOrderSet.Empty();
 
+#if WITH_EDITOR
+		// 先处理确定有序的ExportIndex。
+		for (int32 OrderIndex : EditorData->ExportDataOrderSet)
+		{
+			if (IsValid(ExportDataOuter[OrderIndex]) && !(ExportDataOuter[OrderIndex]->HasAnyFlags(RF_Transient)))
+			{
+				++ExportObjectsNum;
+				EditorData->ExportDataSerializeOrderSet.Add(OrderIndex);
+			}
+		}
+
+		for (int32 index = 0; index < ExportData.Num(); ++index)
+		{
+			if (!EditorData->ExportDataSerializeOrderSet.Contains(index) && ExportData[index].IsValid() &&
+				IsValid(ExportDataOuter[index]) && !(ExportDataOuter[index]->HasAnyFlags(RF_Transient)))
+			{
+				EditorData->ExportDataSerializeOrderSet.Add(index);
+				++ExportObjectsNum;
+			}
+		}
+#else
 		// 先处理确定有序的ExportIndex。
 		for (int32 OrderIndex : EditorData->ExportDataOrderSet)
 		{
@@ -245,6 +271,8 @@ void UConfigVarsLinker::SerializeHeadData(FStructuredArchive::FRecord Record)
 				++ExportObjectsNum;
 			}
 		}
+#endif
+
 		Ar << ExportObjectsNum;
 
 		int32 InitialLocation = Ar.Tell();
@@ -259,6 +287,10 @@ void UConfigVarsLinker::SerializeHeadData(FStructuredArchive::FRecord Record)
 		{
 			ExportData.SetNum(ExportObjectsNum);
 		}
+
+#if WITH_EDITOR
+		ExportDataOuter.SetNum(ExportObjectsNum);
+#endif
 
 		int32 InitialLocation = 0;
 		Ar << InitialLocation;
@@ -280,6 +312,37 @@ void UConfigVarsLinker::SerializeExportData(FStructuredArchive::FRecord Record)
 
 		int32 ExportDataSize = 0;
 		FSerialSizeScope Scope(Ar, ExportDataSize);	// ExportDataSize
+
+		// 验证所有嵌套的数据
+		VerifyData(Ar, PreSerialize, [this, EditorData, &Ar](){
+			 // 先假设所有数据都是顶层的
+			EditorData->TopOrderSet = EditorData->ExportDataSerializeOrderSet;
+			TSet<int32> TopOrderSet = EditorData->TopOrderSet;
+
+			// 第一次遍历，从TopOrderSet中剔除嵌套数据的Index
+			for (int32 OrderIndex : TopOrderSet)
+			{
+				EditorData->ExportDataDepthSet.Add(1);
+				EditorData->ExportDataOrderSet.Add(OrderIndex);
+				EditorData->ExportDataSerializeOrderSet.Add(OrderIndex);
+				VerifyNestedData(Ar, OrderIndex);
+			}
+
+			// 开始记录嵌套数据的Index和Depth
+			EditorData->ExportDataDepthSet.Empty();
+			EditorData->ExportDataOrderSet.Empty();
+			EditorData->ExportDataSerializeOrderSet.Empty();
+			for (int32 OrderIndex : EditorData->TopOrderSet)
+			{
+				EditorData->ExportDataDepthSet.Add(1);
+				EditorData->ExportDataOrderSet.Add(OrderIndex);
+				EditorData->ExportDataSerializeOrderSet.Add(OrderIndex);
+				VerifyNestedData(Ar, OrderIndex);
+			}
+		});
+
+		ImportTable.Empty();
+		ExportTable.Empty();
 
 		// 此时所有ExportIndex都是有序的。
 		for (int32 OrderIndex : EditorData->ExportDataSerializeOrderSet)
@@ -348,9 +411,9 @@ void UConfigVarsLinker::ProcessPendingLoadExports(FStructuredArchive::FRecord Re
 	PendingLoadExports_Async.PopAll(PendingIndexRanges);
 	for (void* IndexRange : PendingIndexRanges)
 	{
-		int32 ExportIndexBegin	= LinkerUtils::IndexRangeToBegin(IndexRange);
-		int32 ExportIndexEnd	= LinkerUtils::IndexRangeToEnd(IndexRange);
-		for (int32 ExportIndex = ExportIndexBegin; ExportIndex <= ExportIndexEnd; ++ExportIndex)
+		uint32 ExportIndexBegin	= LinkerUtils::IndexRangeToBegin(IndexRange);
+		uint32 ExportIndexEnd	= LinkerUtils::IndexRangeToEnd(IndexRange);
+		for (uint32 ExportIndex = ExportIndexBegin; ExportIndex <= ExportIndexEnd; ++ExportIndex)
 		{
 			FConfigVarsExport& Export = ExportTable[ExportIndex];
 			FConfigVarsImport& Import = ImportTable[Export.ClassIndex];
@@ -409,6 +472,7 @@ int32 UConfigVarsLinker::ImportObject(const UObject* ImportObj)
 
 void UConfigVarsLinker::ExportStruct(FStructuredArchive::FRecord Record, FStructView StructData)
 {
+	UConfigVarsLinkerEditorData* EditorData = GetLinkerEditorData();
 	FArchive& Ar = Record.GetUnderlyingArchive();
 
 	int32 InitialImportNum = ImportTable.Num();
@@ -423,6 +487,7 @@ void UConfigVarsLinker::ExportStruct(FStructuredArchive::FRecord Record, FStruct
 	FConfigVarsExport& Export = ExportTable.AddDefaulted_GetRef();
 	Export.SerialLocation = InitialOffset;
 	Export.ClassIndex = ImportObject(StructData.GetScriptStruct());
+	Export.Depth = EditorData->ExportDataDepthSet[ExportTable.Num() - 1];
 
 	if (FinalImportNum > InitialImportNum)
 	{
@@ -450,13 +515,45 @@ void UConfigVarsLinker::VerifyAllExportLoaded()
 #if WITH_EDITOR
 			FConfigVarsBag Bag;
 			Bag.ExportIndex = Index;
-			LoadOrAddData(Bag, nullptr);
+			// 临时以Package填充Outer
+			LoadOrAddData(Bag, nullptr, nullptr);
 #else
 			// LoadData 会走异步加载，Cook时不能使用
 			LoadData(Index);
 #endif
 		}
 	}
+}
+
+void UConfigVarsLinker::VerifyData(FArchive& Ar, EConfigVarsSerialStage Stage, TFunction<void()> Func)
+{
+	// 只有FLinkerLoad or FLinkerSave可以取到Linker。
+	// 而FPackageHarvester不是我们的真正FileWriter的Ar，仅仅是记录一些额外的信息，例如引用到的FName。
+
+	if (Ar.IsCooking() && Stage & EConfigVarsSerialStage::Cooking)
+	{
+		Func();
+	}
+	
+	if (!Ar.GetLinker() && Stage & EConfigVarsSerialStage::PreSerialize)
+	{
+		Func();
+	}
+	
+	if (Ar.GetLinker() && Stage & EConfigVarsSerialStage::Serialize)
+	{
+		Func();
+	}
+}
+
+void UConfigVarsLinker::VerifyNestedData(FArchive& Ar, int32 ExportIndex)
+{
+	if (!ExportData.IsValidIndex(ExportIndex) || !ExportData[ExportIndex].IsValid())
+	{
+		return;
+	}
+
+	FConfigVarsUtils::VerifyNestedDataStruct(Ar, this, ExportData[ExportIndex].GetScriptStruct(), ExportData[ExportIndex].GetMutableMemory(), 1);
 }
 
 void UConfigVarsLinker::VerifyPendingRemovedExport()
@@ -654,6 +751,7 @@ void UConfigVarsLinker::LoadExports_Async_LoadImports(uint16 ExportIndexBegin, u
 
 			if (LoadingImportCounter[CounterID]-- == 1)
 			{
+				LoadingImportCounter.Remove(CounterID);
 				LoadExports_Async_LoadExports(ExportIndexBegin, ExportIndexEnd, Priority);
 			}
 		});
@@ -814,6 +912,45 @@ void UConfigVarsLinker::LoadData_Async(int32 ExportIndex, int32 Priority)
 	}
 }
 
+void UConfigVarsLinker::LoadData_Multi_Async(int32 BeginExportIndex, int32 EndExportIndex, int32 Priority)
+{
+	if (BeginExportIndex == INDEX_NONE || !ExportTable.IsValidIndex(BeginExportIndex) || EndExportIndex == INDEX_NONE || !ExportTable.IsValidIndex(EndExportIndex))
+	{
+		return;
+	}
+
+
+	if (ExportTable[BeginExportIndex].ClassIndex != INDEX_NONE && ExportTable[EndExportIndex].ClassIndex != INDEX_NONE)
+	{
+		LoadExports_Async_Request(BeginExportIndex, EndExportIndex, Priority);
+	}
+}
+
+void UConfigVarsLinker::LoadData_Nested_Async(int32 ExportIndex, int32 Priority)
+{
+	if (ExportIndex == INDEX_NONE || !ExportTable.IsValidIndex(ExportIndex))
+	{
+		return;
+	}
+
+	int32 EndExportIndex = ExportIndex;
+	FConfigVarsExport& BeginExport = ExportTable[ExportIndex];
+	for (int32 i = ExportIndex + 1; i < ExportTable.Num(); ++i)
+	{
+		++EndExportIndex;
+		if (BeginExport.Depth >= ExportTable[i].Depth)
+		{
+			--EndExportIndex;
+			break;
+		}
+	}
+
+	if (BeginExport.ClassIndex != INDEX_NONE && ExportTable[EndExportIndex].ClassIndex != INDEX_NONE)
+	{
+		LoadExports_Async_Request(ExportIndex, EndExportIndex, Priority);
+	}
+}
+
 UConfigVarsLinkerEditorData* UConfigVarsLinker::GetLinkerEditorData()
 {
 #if WITH_EDITOR
@@ -850,9 +987,20 @@ FLinkerLoad* UConfigVarsLinker::CreateLinker_Sync()
 	return Linker;
 }
 
-FStructView UConfigVarsLinker::LoadOrAddData(FConfigVarsBag& ConfigVarsBag, const UScriptStruct* TemplateDataStruct)
+FStructView UConfigVarsLinker::LoadOrAddData(FConfigVarsBag& ConfigVarsBag, const UScriptStruct* TemplateDataStruct, UObject* Outermost)
 {
-	ConfigVarsBag.Outermost = GetPackage();
+
+	// 如果Outermost有效，则覆盖ConfigVarsBag记录的Outer
+	if (IsValid(Outermost))
+	{
+		ConfigVarsBag.Outermost = Outermost;
+	}
+	else
+	{
+		Outermost = ConfigVarsBag.Outermost;
+	}
+
+	
 	ConfigVarsBag.Linker = this;
 	int32& InOutExportIndex = ConfigVarsBag.ExportIndex;
 
@@ -861,6 +1009,7 @@ FStructView UConfigVarsLinker::LoadOrAddData(FConfigVarsBag& ConfigVarsBag, cons
 		// 第二级，在本身的数组中寻找。
 		if (ExportData.IsValidIndex(InOutExportIndex) && ExportData[InOutExportIndex].IsValid())
 		{
+			ExportDataOuter[InOutExportIndex] = Outermost;
 			return ExportData[InOutExportIndex];
 		}
 
@@ -899,6 +1048,7 @@ FStructView UConfigVarsLinker::LoadOrAddData(FConfigVarsBag& ConfigVarsBag, cons
 					}
 					EndLoad(LoadContext);
 
+					ExportDataOuter[InOutExportIndex] = Outermost;
 					return ExportData[InOutExportIndex];
 				}
 			}
@@ -931,6 +1081,7 @@ FStructView UConfigVarsLinker::LoadOrAddData(FConfigVarsBag& ConfigVarsBag, cons
 		if (InOutExportIndex != INDEX_NONE)
 		{
 			// 有空余就用空余。
+			ExportDataOuter[InOutExportIndex] = Outermost;
 			ExportData[InOutExportIndex].InitializeAs(TemplateDataStruct);
 			return ExportData[InOutExportIndex];
 		}
@@ -938,12 +1089,13 @@ FStructView UConfigVarsLinker::LoadOrAddData(FConfigVarsBag& ConfigVarsBag, cons
 		{
 			// 没有可用的空间，则尝试额外分配。
 			ExportData.Emplace(TemplateDataStruct);
+			ExportDataOuter.Add(Outermost);
 
 			// Mark the package dirty...
 			GetPackage()->MarkPackageDirty();
 
 			InOutExportIndex = ExportData.Num() - 1;
-
+			
 			return ExportData.Last();
 		}
 	}
@@ -961,6 +1113,7 @@ void UConfigVarsLinker::MarkPendingRemoved(int32 ExportIndex, bool bIsPendingRem
 
 			// 如果新增数据，则原有排序很可能不再紧凑，需要清空。
 			LinkerEditorData->ExportDataOrderSet.Empty();
+			LinkerEditorData->ExportDataDepthSet.Empty();
 		}
 		else
 		{
@@ -1015,19 +1168,19 @@ bool FConfigVarsUtils::ShouldSerializeValue(FArchive& Ar, FProperty* Property)
 	{
 		return false;
 	}
-	FStructProperty* StructProperty = CastField<FStructProperty>(Property);
-	if (StructProperty)
-	{
-		if (StructProperty->Struct->IsChildOf(FInstancedStruct::StaticStruct()))
-		{
-			return true;
-		}
-		if (StructProperty->Struct->GetCppStructOps()->HasSerializer())
-		{
-			return false;
-		}
+	//FStructProperty* StructProperty = CastField<FStructProperty>(Property);
+	//if (StructProperty)
+	//{
+	//	if (StructProperty->Struct->IsChildOf(FInstancedStruct::StaticStruct()))
+	//	{
+	//		return true;
+	//	}
+	//	if (StructProperty->Struct->GetCppStructOps()->HasSerializer())
+	//	{
+	//		return true;
+	//	}
 
-	}
+	//}
 	
 	return true;
 }
@@ -1056,7 +1209,7 @@ void FConfigVarsUtils::SerializeProperties(FStructuredArchive::FRecord ExportRec
 
 			if (!ChildProperty)
 			{
-				break;
+				continue;
 			}
 			if (!ShouldSerializeValue(UnderlyingArchive, ChildProperty))
 			{
@@ -1276,24 +1429,11 @@ void FConfigVarsUtils::SerializeItem(FStructuredArchive::FRecord PropertyRecord,
 	}
 	else if (FStructProperty* StructProperty = CastField<FStructProperty>(ChildProperty))
 	{
-		if (StructProperty->Struct->IsChildOf(FInstancedStruct::StaticStruct()))
+		if (StructProperty->Struct->GetCppStructOps()->HasSerializer())
 		{
 //////////////////////////////////////////////////////////////////////////
-// FInstancedStruct 特殊处理
-			UScriptStruct* DataStruct = nullptr;
-			FInstancedStruct* InstancedStruct = StructProperty->ContainerPtrToValuePtr<FInstancedStruct>((void*)SrcData);
-			DataStruct = const_cast<UScriptStruct*>(InstancedStruct->GetScriptStruct());
-			FConfigVarsUtils::SerializeObject(PropertyRecord, Linker, DataStruct);
-
-			if (PropertyArchive.IsSaving())
-			{
-				SerializeProperties(PropertyRecord, Linker, DataStruct, InstancedStruct->GetMemory());
-			}
-			else if (PropertyArchive.IsLoading())
-			{
-				InstancedStruct->InitializeAs(DataStruct);
-				SerializeProperties(PropertyRecord, Linker, DataStruct, InstancedStruct->GetMemory());
-			}
+// 主动调用它的序列化函数
+			StructProperty->Struct->GetCppStructOps()->Serialize(PropertyArchive, (uint8*)SrcData + ChildProperty->GetOffset_ForInternal());
 //////////////////////////////////////////////////////////////////////////
 		}
 		else
@@ -1303,15 +1443,14 @@ void FConfigVarsUtils::SerializeItem(FStructuredArchive::FRecord PropertyRecord,
 	}
 	else if (FArrayProperty* ArrayProperty = CastField<FArrayProperty>(ChildProperty))
 	{
+		FScriptArrayHelper ArrayHelper(ArrayProperty, ArrayProperty->ContainerPtrToValuePtr<void>(SrcData));
+		int32 Num = ArrayHelper.Num();
+		PropertyRecord << SA_VALUE(TEXT("ArrayNum"), Num);
+
 		if (FObjectProperty* ItemObjectProperty = CastField<FObjectProperty>(ArrayProperty->Inner))
 		{
-			FScriptArrayHelper ArrayHelper(ArrayProperty, ArrayProperty->ContainerPtrToValuePtr<void>(SrcData));
-
 			if (PropertyArchive.IsSaving())
 			{
-				int32 Num = ArrayHelper.Num();
-				PropertyRecord << SA_VALUE(TEXT("ArrayNum"), Num);
-
 				for (int32 Index = 0; Index < Num; ++Index)
 				{
 					UObject* ObjectValue = ItemObjectProperty->GetObjectPropertyValue(ArrayHelper.GetRawPtr(Index));
@@ -1325,8 +1464,6 @@ void FConfigVarsUtils::SerializeItem(FStructuredArchive::FRecord PropertyRecord,
 			}
 			else if (PropertyArchive.IsLoading())
 			{
-				int32 Num = 0;
-				PropertyRecord << SA_VALUE(TEXT("ArrayNum"), Num);
 				ArrayHelper.EmptyValues(Num);
 
 				for (; Num; --Num)
@@ -1341,7 +1478,25 @@ void FConfigVarsUtils::SerializeItem(FStructuredArchive::FRecord PropertyRecord,
 		}
 		else
 		{
-			ArrayProperty->SerializeItem(FStructuredArchiveFromArchive(PropertyArchive).GetSlot(), (uint8*)SrcData + ChildProperty->GetOffset_ForInternal(), nullptr);
+			if (PropertyArchive.IsSaving())
+			{
+				for (int32 Index = 0; Index < Num; ++Index)
+				{
+					SerializeItem(PropertyRecord, ArrayProperty->Inner, Linker, ArrayHelper.GetRawPtr(Index));
+				}
+			}
+			else if (PropertyArchive.IsLoading())
+			{
+				ArrayHelper.EmptyValues(Num);
+
+				for (; Num; --Num)
+				{
+					int32 Index = ArrayHelper.AddUninitializedValue();
+					SerializeItem(PropertyRecord, ArrayProperty->Inner, Linker, ArrayHelper.GetRawPtr(Index));
+				}
+			}
+
+			//ArrayProperty->SerializeItem(FStructuredArchiveFromArchive(PropertyArchive).GetSlot(), (uint8*)SrcData + ChildProperty->GetOffset_ForInternal(), nullptr);
 		}
 	}
 	else if (FMapProperty* MapProperty = CastField<FMapProperty>(ChildProperty))
@@ -1350,15 +1505,15 @@ void FConfigVarsUtils::SerializeItem(FStructuredArchive::FRecord PropertyRecord,
 		FProperty* ValueProperty = MapProperty->ValueProp;
 		FObjectProperty* KeyObjectProperty = CastField<FObjectProperty>(MapProperty->KeyProp);
 		FObjectProperty* ValueObjectProperty = CastField<FObjectProperty>(MapProperty->ValueProp);
+
+		FScriptMapHelper MapHelper(MapProperty, MapProperty->ContainerPtrToValuePtr<void>(SrcData));
+		int32 Num = MapHelper.Num();
+		FStructuredArchive::FArray EntriesArray = PropertyRecord.EnterArray(TEXT("Entries"), Num);
+
 		if (KeyObjectProperty || ValueObjectProperty)
 		{
-			FScriptMapHelper MapHelper(MapProperty, MapProperty->ContainerPtrToValuePtr<void>(SrcData));
-
 			if (PropertyArchive.IsSaving())
 			{
-				int32 Num = MapHelper.Num();
-				FStructuredArchive::FArray EntriesArray = PropertyRecord.EnterArray(TEXT("Entries"), Num);
-
 				// Map 是稀疏数组，必须判断Index有效性
 				for (int32 Index = 0; Num; ++Index)
 				{
@@ -1407,10 +1562,8 @@ void FConfigVarsUtils::SerializeItem(FStructuredArchive::FRecord PropertyRecord,
 			}
 			else if (PropertyArchive.IsLoading())
 			{
-				int32 Num = 0;
-				FStructuredArchive::FArray EntriesArray = PropertyRecord.EnterArray(TEXT("Entries"), Num);
-
 				MapHelper.EmptyValues(Num);
+
 				for (; Num; --Num)
 				{
 					FStructuredArchive::FRecord EntryRecord = EntriesArray.EnterElement().EnterRecord();
@@ -1451,21 +1604,61 @@ void FConfigVarsUtils::SerializeItem(FStructuredArchive::FRecord PropertyRecord,
 		}
 		else
 		{
-			MapProperty->SerializeItem(FStructuredArchiveFromArchive(PropertyArchive).GetSlot(), (uint8*)SrcData + ChildProperty->GetOffset_ForInternal(), nullptr);
+			// FConfigVars不能作为Key键
+			// FProperty* KeyProperty = MapProperty->KeyProp;
+
+			if (PropertyArchive.IsSaving())
+			{
+				for (int32 Index = 0; Num; ++Index)
+				{
+					// Map 是稀疏数组，必须判断Index有效性
+					if (MapHelper.IsValidIndex(Index))
+					{
+						FStructuredArchive::FRecord EntryRecord = EntriesArray.EnterElement().EnterRecord();
+
+						uint8* MapKeyData = MapHelper.GetKeyPtr(Index);
+						uint8* MapValueData = MapHelper.GetValuePtr(Index);
+
+						FSerializedPropertyScope SerializedProperty(PropertyArchive, KeyProperty, MapProperty);
+						KeyProperty->SerializeItem(EntryRecord.EnterField(TEXT("Key")), MapKeyData, nullptr);
+
+						SerializeItem(PropertyRecord, ValueProperty, Linker, MapValueData);
+					}
+				}
+			}
+			else if (PropertyArchive.IsLoading())
+			{
+				MapHelper.EmptyValues(Num);
+				for (; Num; --Num)
+				{
+					FStructuredArchive::FRecord EntryRecord = EntriesArray.EnterElement().EnterRecord();
+
+					int32 Index = MapHelper.AddDefaultValue_Invalid_NeedsRehash();
+					uint8* MapKeyData = MapHelper.GetKeyPtr(Index);
+					uint8* MapValueData = MapHelper.GetValuePtr(Index);
+
+
+					FSerializedPropertyScope SerializedProperty(PropertyArchive, KeyProperty, MapProperty);
+					KeyProperty->SerializeItem(EntryRecord.EnterField(TEXT("Key")), MapKeyData, nullptr);
+
+					SerializeItem(PropertyRecord, ValueProperty, Linker, MapValueData);
+				}
+			}
+
+			//MapProperty->SerializeItem(FStructuredArchiveFromArchive(PropertyArchive).GetSlot(), (uint8*)SrcData + ChildProperty->GetOffset_ForInternal(), nullptr);
 		}
 	}
 	else if (FSetProperty* SetProperty = CastField<FSetProperty>(ChildProperty))
 	{
+		FScriptSetHelper SetHelper(SetProperty, SetProperty->ContainerPtrToValuePtr<void>(SrcData));
+		// 这里用Num而不是MaxIndex，可以减少遍历数量
+		int32 Num = SetHelper.Num();
+		FStructuredArchive::FArray ElementsArray = PropertyRecord.EnterArray(TEXT("Elements"), Num);
+
 		if (FObjectProperty* ItemObjectProperty = CastField<FObjectProperty>(SetProperty->ElementProp))
 		{
-			FScriptSetHelper SetHelper(SetProperty, SetProperty->ContainerPtrToValuePtr<void>(SrcData));
-
 			if (PropertyArchive.IsSaving())
 			{
-				// 这里用Num而不是MaxIndex，可以减少遍历数量
-				int32 Num = SetHelper.Num();
-				FStructuredArchive::FArray ElementsArray = PropertyRecord.EnterArray(TEXT("Elements"), Num);
-
 				FSerializedPropertyScope SerializedProperty(PropertyArchive, ItemObjectProperty, SetProperty);
 
 				// Set 是稀疏数组，必须判断Index有效性
@@ -1491,8 +1684,6 @@ void FConfigVarsUtils::SerializeItem(FStructuredArchive::FRecord PropertyRecord,
 			}
 			else if (PropertyArchive.IsLoading())
 			{
-				int32 Num = 0;
-				FStructuredArchive::FArray ElementsArray = PropertyRecord.EnterArray(TEXT("Elements"), Num);
 				FSerializedPropertyScope SerializedProperty(PropertyArchive, ItemObjectProperty, SetProperty);
 
 				SetHelper.EmptyElements(Num);
@@ -1509,12 +1700,166 @@ void FConfigVarsUtils::SerializeItem(FStructuredArchive::FRecord PropertyRecord,
 		}
 		else
 		{
-			SetProperty->SerializeItem(FStructuredArchiveFromArchive(PropertyArchive).GetSlot(), (uint8*)SrcData + ChildProperty->GetOffset_ForInternal(), nullptr);
+			if (PropertyArchive.IsSaving())
+			{
+				// Set 是稀疏数组，必须判断Index有效性
+				for (int32 Index = 0; Num; ++Index)
+				{
+					if (SetHelper.IsValidIndex(Index))
+					{
+						SerializeItem(PropertyRecord, SetProperty->ElementProp, Linker, SetHelper.GetElementPtr(Index));
+					}
+				}
+			}
+			else if (PropertyArchive.IsLoading())
+			{
+				FSerializedPropertyScope SerializedProperty(PropertyArchive, ItemObjectProperty, SetProperty);
+
+				SetHelper.EmptyElements(Num);
+
+				for (; Num; --Num)
+				{
+					int32 Index = SetHelper.AddDefaultValue_Invalid_NeedsRehash();
+					SerializeItem(PropertyRecord, SetProperty->ElementProp, Linker, SetHelper.GetElementPtr(Index));
+				}
+			}
+
+			// SetProperty->SerializeItem(FStructuredArchiveFromArchive(PropertyArchive).GetSlot(), (uint8*)SrcData + ChildProperty->GetOffset_ForInternal(), nullptr);
 		}
 	}
 	else
 	{
 		FSerializedPropertyScope SerializedProperty(PropertyArchive, ChildProperty);
 		ChildProperty->SerializeItem(FStructuredArchiveFromArchive(PropertyArchive).GetSlot(), (uint8*)SrcData + ChildProperty->GetOffset_ForInternal());
+	}
+}
+
+template<typename SrcType>
+void FConfigVarsUtils::VerifyNestedDataStruct(FArchive& Ar, UConfigVarsLinker* Linker, const UStruct* DataStruct, SrcType* SrcData, int32 Depth)
+{
+	if (!DataStruct || !SrcData)
+	{
+		return;
+	}
+
+	check(Ar.IsSaving());
+
+	for (TFieldIterator<FProperty> PropertyIter(DataStruct); PropertyIter; ++PropertyIter)
+	{
+		FProperty* ChildProperty = *PropertyIter;
+		VerifyNestedDataProperties(Ar, Linker, ChildProperty, SrcData, Depth);
+	}
+}
+
+template<typename SrcType>
+void FConfigVarsUtils::VerifyNestedDataProperties(FArchive& Ar, UConfigVarsLinker* Linker, FProperty* ChildProperty, SrcType* SrcData, int32 Depth)
+{
+	if (!ChildProperty)
+	{
+		return;
+	}
+
+	check(Ar.IsSaving());
+
+	++Depth;
+
+	if (FStructProperty* StructProperty = CastField<FStructProperty>(ChildProperty))
+	{
+		const UScriptStruct* ScriptStruct = StructProperty->Struct;
+		if (ScriptStruct->IsChildOf(FConfigVarsBag::StaticStruct()))
+		{
+			FConfigVarsBag* ConfigVarsBag = StructProperty->ContainerPtrToValuePtr<FConfigVarsBag>((void*)SrcData);
+			UConfigVarsLinkerEditorData* EditorData = Linker->GetLinkerEditorData();
+
+			// 二级及以上的ConfigVars的ExportIndex都还未被映射
+
+			int32& ExportIndex = PRIVATE_GET_VAR(ConfigVarsBag, ExportIndex);
+			int32& OldIndex = ExportIndex;
+			// 更新适配了嵌套后的数据Depth和ExportIndex
+
+			EditorData->ExportDataDepthSet.Add(Depth);
+			EditorData->ExportDataOrderSet.Add(ExportIndex);
+			EditorData->ExportDataSerializeOrderSet.Add(ExportIndex);
+			EditorData->TopOrderSet.Remove(ExportIndex);
+
+			ExportIndex = EditorData->ExportDataOrderSet.Num() - 1;
+
+			if (!Linker->ExportData.IsValidIndex(OldIndex) || !Linker->ExportData[OldIndex].IsValid())
+			{
+				return;
+			}
+			VerifyNestedDataStruct(Ar, Linker, Linker->ExportData[OldIndex].GetScriptStruct(), Linker->ExportData[OldIndex].GetMutableMemory(), Depth);
+		}
+		else if (ScriptStruct->IsChildOf(FInstancedStruct::StaticStruct()))
+		{
+			//////////////////////////////////////////////////////////////////////////
+			// FInstancedStruct 特殊处理
+			FInstancedStruct* InstancedStruct = StructProperty->ContainerPtrToValuePtr<FInstancedStruct>((void*)SrcData);
+			VerifyNestedDataStruct(Ar, Linker, InstancedStruct->GetScriptStruct(), InstancedStruct->GetMutableMemory(), Depth);
+			//////////////////////////////////////////////////////////////////////////
+		}
+		else
+		{
+			VerifyNestedDataStruct(Ar, Linker, ScriptStruct, (uint8*)SrcData + ChildProperty->GetOffset_ForInternal(), Depth);
+		}
+	}
+	else if (FObjectProperty* ObjectProperty = CastField<FObjectProperty>(ChildProperty))
+	{
+		static const FName NAME_ForceLazyLoadExportObject = "ConfigVars";
+
+		bool bIsExportObject = ChildProperty->HasAnyPropertyFlags(CPF_ExportObject);
+		bool bForceLazyLoadExportObject = ChildProperty->HasMetaData(NAME_ForceLazyLoadExportObject) && bIsExportObject;
+		if (!bForceLazyLoadExportObject)
+		{
+			return;
+		}
+		UObject* ObjectValue = ObjectProperty->GetObjectPropertyValue((uint8*)SrcData + ChildProperty->GetOffset_ForInternal());
+
+		if (IsValid(ObjectValue))
+		{
+			VerifyNestedDataStruct(Ar, Linker, ObjectValue->GetClass(), ObjectValue, Depth);
+		}
+	}
+	else if (FArrayProperty* ArrayProperty = CastField<FArrayProperty>(ChildProperty))
+	{
+		FScriptArrayHelper ArrayHelper(ArrayProperty, ArrayProperty->ContainerPtrToValuePtr<void>(SrcData));
+		int32 Num = ArrayHelper.Num();
+
+		for (int32 Index = 0; Index < Num; ++Index)
+		{
+			VerifyNestedDataProperties(Ar, Linker, ArrayProperty->Inner, ArrayHelper.GetRawPtr(Index), Depth);
+		}
+	}
+	else if (FMapProperty* MapProperty = CastField<FMapProperty>(ChildProperty))
+	{
+		// FConfigVars不能作为Key键
+		// FProperty* KeyProperty = MapProperty->KeyProp;
+		FProperty* ValueProperty = MapProperty->ValueProp;
+
+		FScriptMapHelper MapHelper(MapProperty, MapProperty->ContainerPtrToValuePtr<void>(SrcData));
+		int32 Num = MapHelper.Num();
+		for (int32 Index = 0; Num; ++Index)
+		{
+			// Map 是稀疏数组，必须判断Index有效性
+			if (MapHelper.IsValidIndex(Index))
+			{
+				//uint8* MapKeyData = MapHelper.GetKeyPtr(Index);
+				uint8* MapValueData = MapHelper.GetValuePtr(Index);
+				VerifyNestedDataProperties(Ar, Linker, ValueProperty, MapValueData, Depth);
+			}
+		}
+	}
+	else if (FSetProperty* SetProperty = CastField<FSetProperty>(ChildProperty))
+	{
+		FScriptSetHelper SetHelper(SetProperty, SetProperty->ContainerPtrToValuePtr<void>(SrcData));
+		int32 Num = SetHelper.Num();
+		// Set 是稀疏数组，必须判断Index有效性
+		for (int32 Index = 0; Num; ++Index)
+		{
+			if (SetHelper.IsValidIndex(Index))
+			{	
+				VerifyNestedDataProperties(Ar, Linker, SetProperty->ElementProp, SetHelper.GetElementPtr(Index), Depth);
+			}
+		}
 	}
 }

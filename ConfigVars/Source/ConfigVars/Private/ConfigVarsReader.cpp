@@ -48,7 +48,7 @@ DEFINE_FUNCTION(UConfigVarsBagReader::execGetValue)
 	{
 		P_NATIVE_BEGIN;
 		ExecResult = EStructUtilsResult::NotValid;
-		if (IsValid(Outer) && ConfigVarsBag.IsValid())
+		if (IsValid(Outer) && ConfigVarsBag.IsDataValid())
 		{
 			FConstStructView StructView = ConfigVarsBag.LoadData(Outer);
 			if (StructView.IsValid() && StructView.GetScriptStruct()->IsChildOf(ValueProp->Struct))
@@ -64,6 +64,16 @@ DEFINE_FUNCTION(UConfigVarsBagReader::execGetValue)
 void UConfigVarsBagReader::LoadData_Async(UObject* Outer, FConfigVarsBag ConfigVarsBag, int32 Priority)
 {
 	ConfigVarsBag.LoadData_Async(Outer, Priority);
+}
+
+void UConfigVarsBagReader::LoadData_Multi_Async(UObject* Outer, FConfigVarsBag ConfigVarsBegin, FConfigVarsBag ConfigVarsEnd, int32 Priority)
+{
+	FConfigVarsBag::LoadData_Multi_Async(Outer, ConfigVarsBegin, ConfigVarsEnd, Priority);
+}
+
+void UConfigVarsBagReader::LoadData_Nested_Async(UObject* Outer, FConfigVarsBag ConfigVarsBag, int32 Priority)
+{
+	FConfigVarsBag::LoadData_Nested_Async(Outer, ConfigVarsBag, Priority);
 }
 
 #undef LOCTEXT_NAMESPACE

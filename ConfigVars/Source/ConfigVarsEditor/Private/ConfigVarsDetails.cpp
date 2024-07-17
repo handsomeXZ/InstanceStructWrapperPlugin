@@ -19,27 +19,34 @@
 class FConfigVarsDetailUtils
 {
 public:
+	// 不断向外查找，必定成功
+	static void FindOuterObject(TSharedRef<IPropertyHandle> PropertyHandle, OUT TArray<UObject*>& OuterObjects)
+	{
+		OuterObjects.Empty();
+		PropertyHandle->GetOuterObjects(OuterObjects);
+		if (!OuterObjects.IsEmpty())
+		{
+			return;
+		}
+
+		if (PropertyHandle->GetParentHandle().IsValid())
+		{
+			FindOuterObject(PropertyHandle->GetParentHandle().ToSharedRef(), OuterObjects);
+		}
+		else
+		{
+			check(0);
+		}
+	}
+
 	static FStructView LoadOrAddData(UObject* Outermost, FConfigVarsBag* ConfigVarsBag, const UScriptStruct* DataStruct)
 	{
 		if (!Outermost || !ConfigVarsBag)
 		{
 			return FStructView();
 		}
-		UPackage* Package = Outermost->GetPackage();
 
-
-		// 由ConfigVarsLinker继续寻找或创建
-		UConfigVarsLinker* ConfigVarsLinker = FindObject<UConfigVarsLinker>(Package, TEXT("ConfigVarsLinker"));
-		if (!ConfigVarsLinker)
-		{
-			ConfigVarsLinker = NewObject<UConfigVarsLinker>(Package, UConfigVarsLinker::StaticClass(), FName("ConfigVarsLinker"), RF_Public | RF_Standalone);
-		}
-		if (ConfigVarsLinker)
-		{
-			return ConfigVarsLinker->LoadOrAddData(*ConfigVarsBag, DataStruct);
-		}
-
-		return FStructView();
+		return ConfigVarsBag->EditorLoadOrAddData(Outermost, DataStruct);
 	}
 
 	static void MarkPendingRemoved(UObject* Outermost, int32 ExportIndex, bool bIsPendingRemoved)
@@ -51,10 +58,10 @@ public:
 		UPackage* Package = Outermost->GetPackage();
 
 		// 由ConfigVarsLinker继续寻找或创建
-		UConfigVarsLinker* ConfigVarsLinker = FindObject<UConfigVarsLinker>(Package, TEXT("ConfigVarsLinker"));
+		UConfigVarsLinker* ConfigVarsLinker = FindObject<UConfigVarsLinker>(Package, TEXT("Template_ConfigVarsLinker"));
 		if (!ConfigVarsLinker)
 		{
-			ConfigVarsLinker = NewObject<UConfigVarsLinker>(Package, UConfigVarsLinker::StaticClass(), FName("ConfigVarsLinker"), RF_Public | RF_Standalone);
+			ConfigVarsLinker = NewObject<UConfigVarsLinker>(Package, UConfigVarsLinker::StaticClass(), FName("Template_ConfigVarsLinker"), RF_Public | RF_Standalone);
 		}
 		if (ConfigVarsLinker)
 		{
@@ -71,10 +78,10 @@ public:
 		UPackage* Package = Outermost->GetPackage();
 
 		// 由ConfigVarsLinker继续寻找或创建
-		UConfigVarsLinker* ConfigVarsLinker = FindObject<UConfigVarsLinker>(Package, TEXT("ConfigVarsLinker"));
+		UConfigVarsLinker* ConfigVarsLinker = FindObject<UConfigVarsLinker>(Package, TEXT("Template_ConfigVarsLinker"));
 		if (!ConfigVarsLinker)
 		{
-			ConfigVarsLinker = NewObject<UConfigVarsLinker>(Package, UConfigVarsLinker::StaticClass(), FName("ConfigVarsLinker"), RF_Public | RF_Standalone);
+			ConfigVarsLinker = NewObject<UConfigVarsLinker>(Package, UConfigVarsLinker::StaticClass(), FName("Template_ConfigVarsLinker"), RF_Public | RF_Standalone);
 		}
 		if (ConfigVarsLinker)
 		{
@@ -272,11 +279,12 @@ protected:
 			return;
 		}
 
-		TArray<UPackage*> Packages;
-		StructProperty->GetOuterPackages(Packages);
+		TArray<UObject*> OuterObjects;
+		//StructPropertyHandle->GetOuterPackages(Packages);
+		FConfigVarsDetailUtils::FindOuterObject(StructProperty.ToSharedRef(), OuterObjects);
 
 		// 非事务，不允许撤回
-		StructProperty->EnumerateRawData([&InFunc, &Packages](void* RawData, const int32 DataIndex, const int32 /*NumDatas*/)
+		StructProperty->EnumerateRawData([&InFunc, &OuterObjects](void* RawData, const int32 DataIndex, const int32 /*NumDatas*/)
 			{
 				FConfigVarsBag* Bag = static_cast<FConfigVarsBag*>(RawData);
 				UPackage* Package = nullptr;
@@ -284,11 +292,11 @@ protected:
 				uint8* Memory = nullptr;
 				if (Bag)
 				{
-					if (ensureMsgf(Packages.IsValidIndex(DataIndex), TEXT("Expecting packges and raw data to match.")))
+					if (ensureMsgf(OuterObjects.IsValidIndex(DataIndex), TEXT("Expecting packges and raw data to match.")))
 					{
-						Package = Packages[DataIndex];
+						Package = OuterObjects[DataIndex]->GetPackage();
 
-						FStructView StructView = FConfigVarsDetailUtils::LoadOrAddData(Packages[DataIndex], Bag, nullptr);
+						FStructView StructView = FConfigVarsDetailUtils::LoadOrAddData(OuterObjects[DataIndex], Bag, nullptr);
 
 						ScriptStruct = StructView.GetScriptStruct();
 						Memory = StructView.GetMemory();
@@ -315,7 +323,7 @@ struct FConfigVarsViewModel : public TSharedFromThis<FConfigVarsViewModel>
 	TSharedPtr<IPropertyHandle> PropertyHandle;
 	FStructView ConfigVarsDataCache;
 
-	TArray<TSharedPtr<FConfigVarsBagHandle>> ConfigVarsBagHandles;
+	//TArray<TSharedPtr<FConfigVarsBagHandle>> ConfigVarsBagHandles;
 
 	TWeakPtr<FConfigVarsDataProvider> ConfigVarsDataProvider;
 };
@@ -335,7 +343,7 @@ void FConfigVarsViewModel::Init()
 	TArray<UPackage*> Packages;
 	PropertyHandle->GetOuterPackages(Packages);
 
-	ConfigVarsBagHandles.Empty(Packages.Num());
+	//ConfigVarsBagHandles.Empty(Packages.Num());
 
 	PropertyHandle->EnumerateRawData([this, &Packages](void* RawData, const int32 DataIndex, const int32 /*NumDatas*/)
 		{
@@ -344,10 +352,10 @@ void FConfigVarsViewModel::Init()
 			{
 				if (ensureMsgf(Packages.IsValidIndex(DataIndex), TEXT("Expecting packges and raw data to match.")))
 				{
-					TSharedRef<FConfigVarsBagHandle> ConfigVarsBagHandle = MakeShared<FConfigVarsBagHandle>(Bag->GetExportIndex(), Packages[DataIndex], PropertyHandle.ToSharedRef());
-					ConfigVarsBagHandle->Init();
+					//TSharedRef<FConfigVarsBagHandle> ConfigVarsBagHandle = MakeShared<FConfigVarsBagHandle>(Bag->GetExportIndex(), Packages[DataIndex], PropertyHandle.ToSharedRef());
+					//ConfigVarsBagHandle->Init();
 
-					ConfigVarsBagHandles.Add(ConfigVarsBagHandle);
+					//ConfigVarsBagHandles.Add(ConfigVarsBagHandle);
 				}
 			}
 			return true;
@@ -400,25 +408,27 @@ void FConfigVarsDetails::CustomizeHeader(TSharedRef<IPropertyHandle> StructPrope
 		return;
 	}
 
-	TArray<UPackage*> Packages;
-	StructPropertyHandle->GetOuterPackages(Packages);
+	TArray<UObject*> OuterObjects;
+	//StructPropertyHandle->GetOuterPackages(Packages);
+	FConfigVarsDetailUtils::FindOuterObject(StructPropertyHandle, OuterObjects);
 
 	ViewModel = MakeShared<FConfigVarsViewModel>(StructPropertyHandle);
 
 	// 非事务，不允许撤回
 	FStructView ConfigVarsDataCache;
-	StructPropertyHandle->EnumerateRawData([&Packages, &ConfigVarsDataCache, ConfigVarsDataStruct](void* RawData, const int32 DataIndex, const int32 /*NumDatas*/)
+	StructPropertyHandle->EnumerateRawData([&OuterObjects, &ConfigVarsDataCache, ConfigVarsDataStruct](void* RawData, const int32 DataIndex, const int32 /*NumDatas*/)
 	{
 		FConfigVarsBag* Bag = static_cast<FConfigVarsBag*>(RawData);
 		if (Bag)
 		{
-			if (ensureMsgf(Packages.IsValidIndex(DataIndex), TEXT("Expecting packges and raw data to match.")))
+			if (ensureMsgf(OuterObjects.IsValidIndex(DataIndex), TEXT("Expecting packges and raw data to match.")))
 			{
-				if (Packages[DataIndex]->HasAnyFlags(RF_ClassDefaultObject))
+				if (OuterObjects[DataIndex]->HasAnyFlags(RF_ClassDefaultObject))
 				{
 					return false;
 				}
-				ConfigVarsDataCache = FConfigVarsDetailUtils::LoadOrAddData(Packages[DataIndex], Bag, ConfigVarsDataStruct);
+
+				ConfigVarsDataCache = FConfigVarsDetailUtils::LoadOrAddData(OuterObjects[DataIndex], Bag, ConfigVarsDataStruct);
 			}
 		}
 		return true;
@@ -453,6 +463,8 @@ void FConfigVarsDetails::CustomizeChildren(TSharedRef<IPropertyHandle> StructPro
 	TSharedRef<FConfigVarsDataProvider> NewStructProvider = ViewModel->GetConfigVarsDataProvider();
 
 	TArray<TSharedPtr<IPropertyHandle>> ChildProperties = StructPropertyHandle->AddChildStructure(NewStructProvider);
+
+
 	for (TSharedPtr<IPropertyHandle> ChildHandle : ChildProperties)
 	{
 		IDetailPropertyRow& Row = StructBuilder.AddProperty(ChildHandle.ToSharedRef());
