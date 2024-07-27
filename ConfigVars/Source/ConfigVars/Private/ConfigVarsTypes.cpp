@@ -61,7 +61,7 @@ FConfigVarsBag::~FConfigVarsBag()
 {
 
 #if WITH_EDITOR && WITH_EDITORONLY_DATA
-	if (IsValid(Linker))
+	if (IsValid(Linker) && !(Linker->HasAnyFlags(RF_BeginDestroyed | RF_FinishDestroyed)))
 	{
 		Linker->MarkPendingRemoved(ExportIndex, true);
 	}

@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "IPropertyTypeCustomization.h"
 #include "Styling/SlateStyle.h"
+#include "StructViewerFilter.h"
 
 #include "StructView.h"
 
@@ -24,4 +25,47 @@ protected:
 
 protected:
 	TSharedPtr<FConfigVarsViewModel> ViewModel;
+};
+
+struct FConfigVarsViewModel : public TSharedFromThis<FConfigVarsViewModel>
+{
+	FConfigVarsViewModel(TSharedRef<IPropertyHandle> InPropertyHandle, IPropertyTypeCustomizationUtils& StructCustomizationUtils);
+	~FConfigVarsViewModel();
+
+	void Init();
+
+	void GenerateHeader(class FDetailWidgetRow& HeaderRow);
+	void GenerateChildren(class IDetailChildrenBuilder& StructBuilder);
+
+protected:
+	TSharedRef<SWidget> GenerateStructPicker();
+	void OnStructPicked(const UScriptStruct* InStruct);
+	FText GetDisplayValueString() const;
+	FText GetTooltipText() const;
+	const FSlateBrush* GetDisplayValueIcon() const;
+
+	UScriptStruct* DataStruct;
+	TSharedPtr<IPropertyHandle> PropertyHandle;
+
+	TSharedPtr<SComboButton> ComboButton;
+	TSharedPtr<IPropertyUtilities> PropUtils;
+};
+
+/**
+ * Filter used by the instanced struct struct picker.
+ */
+class FConfigVarsFilter : public IStructViewerFilter
+{
+public:
+	/** The base struct for the property that classes must be a child-of. */
+	const UScriptStruct* BaseStruct = nullptr;
+
+	// A flag controlling whether we allow UserDefinedStructs
+	bool bAllowUserDefinedStructs = false;
+
+	// A flag controlling whether we allow to select the BaseStruct
+	bool bAllowBaseStruct = true;
+
+	virtual bool IsStructAllowed(const FStructViewerInitializationOptions& InInitOptions, const UScriptStruct* InStruct, TSharedRef<FStructViewerFilterFuncs> InFilterFuncs) override;
+	virtual bool IsUnloadedStructAllowed(const FStructViewerInitializationOptions& InInitOptions, const FSoftObjectPath& InStructPath, TSharedRef<FStructViewerFilterFuncs> InFilterFuncs) override;
 };

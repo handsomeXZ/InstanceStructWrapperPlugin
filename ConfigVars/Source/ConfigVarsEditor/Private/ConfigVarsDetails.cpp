@@ -6,11 +6,17 @@
 
 #include "ConfigVarsLinkerEditorData.h"
 
+#include "ScopedTransaction.h"
+#include "IPropertyUtilities.h"
+#include "DetailLayoutBuilder.h"
 #include "IDetailPropertyRow.h"
 #include "IDetailChildrenBuilder.h"
 #include "DetailWidgetRow.h"
 #include "IStructureDataProvider.h"
 #include "InstancedStruct.h"
+#include "StructViewerModule.h"
+#include "Styling/SlateIconFinder.h"
+#include "Engine/UserDefinedStruct.h"
 
 #define LOCTEXT_NAMESPACE "ConfigVarsDetails"
 
@@ -35,7 +41,7 @@ public:
 		}
 		else
 		{
-			check(0);
+			return;
 		}
 	}
 
@@ -69,6 +75,26 @@ public:
 		}
 	}
 
+	static void ImmediateRemoveData(UObject* Outermost, FConfigVarsBag* ConfigVarsBag)
+	{
+		if (!Outermost || !ConfigVarsBag)
+		{
+			return;
+		}
+		UPackage* Package = Outermost->GetPackage();
+
+		// 由ConfigVarsLinker继续寻找或创建
+		UConfigVarsLinker* ConfigVarsLinker = FindObject<UConfigVarsLinker>(Package, TEXT("Template_ConfigVarsLinker"));
+		if (!ConfigVarsLinker)
+		{
+			ConfigVarsLinker = NewObject<UConfigVarsLinker>(Package, UConfigVarsLinker::StaticClass(), FName("Template_ConfigVarsLinker"), RF_Public | RF_Standalone);
+		}
+		if (ConfigVarsLinker)
+		{
+			return ConfigVarsLinker->ImmediateRemoveData(*ConfigVarsBag);
+		}
+	}
+
 	static UConfigVarsLinkerEditorData* GetLinkerEditorData(UObject* Outermost)
 	{
 		if (!Outermost)
@@ -90,79 +116,54 @@ public:
 
 		return nullptr;
 	}
-};
 
-/**
- * 有效的Handle会在析构时自动标记PendingRemoved ExportData。
- * 注意：
- * 这里仅标记，而不会马上移除数据，需要直到真正进行序列化时才会处理移除。
- */
-struct FConfigVarsBagHandle : TSharedFromThis<FConfigVarsBagHandle>
-{
-	FConfigVarsBagHandle(int32 InExportIndex, UPackage* InPackage, TSharedRef<IPropertyHandle> InPropertyHandle)
-		: ExportIndex(InExportIndex)
-		, Package(InPackage)
-		, PropertyHandle(InPropertyHandle)
+	static FPropertyAccess::Result GetLastConfigVarsStruct(TSharedRef<IPropertyHandle> StructProperty, const UScriptStruct*& OutCommonStruct)
 	{
-	}
-	
-	~FConfigVarsBagHandle()
-	{
-		ResetReference();
-	}
+		bool bHasResult = false;
+		bool bHasMultipleValues = false;
 
-	void Init()
-	{
-		if (!Package.IsValid())
+		TArray<UObject*> OuterObjects;
+		FindOuterObject(StructProperty, OuterObjects);
+
+		StructProperty->EnumerateRawData([&OutCommonStruct, &bHasResult, &bHasMultipleValues, &OuterObjects](void* RawData, const int32 DataIndex, const int32 /*NumDatas*/)
+			{
+				FConfigVarsBag* Bag = static_cast<FConfigVarsBag*>(RawData);
+				if (Bag)
+				{
+					if (ensureMsgf(OuterObjects.IsValidIndex(DataIndex), TEXT("Expecting packges and raw data to match.")))
+					{
+						if (OuterObjects[DataIndex]->HasAnyFlags(RF_ClassDefaultObject))
+						{
+							return false;
+						}
+
+						// 如果不存在懒加载数据，不会主动创建
+						FStructView StructData = FConfigVarsDetailUtils::LoadOrAddData(OuterObjects[DataIndex], Bag, nullptr);
+
+						if (!bHasResult)
+						{
+							OutCommonStruct = StructData.GetScriptStruct();
+						}
+						else if (OutCommonStruct != StructData.GetScriptStruct())
+						{
+							bHasMultipleValues = true;
+						}
+
+						bHasResult = true;
+					}
+				}
+
+				return true;
+			});
+
+		if (bHasMultipleValues)
 		{
-			return;
+			return FPropertyAccess::MultipleValues;
 		}
 
-		if (UConfigVarsLinkerEditorData* LinkerEditorData = FConfigVarsDetailUtils::GetLinkerEditorData(Package.Get()))
-		{
-			LinkerEditorData->OnConfigVarsBagPropertyNodeChanged.Broadcast(Package.Get(), PropertyHandle->GetPropertyPath());
-			OnConfigVarsBagPropertyNodeChangedHandle = LinkerEditorData->OnConfigVarsBagPropertyNodeChanged.AddSP(this, &FConfigVarsBagHandle::OnConfigVarsBagPropertyNodeChanged);
-		}
-
-		FConfigVarsDetailUtils::MarkPendingRemoved(Package.Get(), ExportIndex, false);
-	}
-
-	void ResetReference()
-	{
-		if (Package.IsValid())
-		{
-			FConfigVarsDetailUtils::MarkPendingRemoved(Package.Get(), ExportIndex, true);
-		}
-
-		if (UConfigVarsLinkerEditorData* LinkerEditorData = FConfigVarsDetailUtils::GetLinkerEditorData(Package.Get()))
-		{
-			LinkerEditorData->OnConfigVarsBagPropertyNodeChanged.Remove(OnConfigVarsBagPropertyNodeChangedHandle);
-		}
-
-
-		ExportIndex = INDEX_NONE;
-		Package.Reset();
-		PropertyHandle.Reset();
+		return bHasResult ? FPropertyAccess::Success : FPropertyAccess::Fail;
 	}
 
-
-	void OnConfigVarsBagPropertyNodeChanged(UPackage* InPackage, FStringView PropertyPath)
-	{
-		if (!PropertyHandle.IsValid() || PropertyHandle->GetPropertyPath() != PropertyPath)
-		{
-			return;
-		}
-
-		if (Package.IsValid() && Package.Get() == InPackage)
-		{
-			ResetReference();
-		}
-	}
-
-	int32 ExportIndex;
-	TWeakObjectPtr<UPackage> Package;
-	TSharedPtr<IPropertyHandle> PropertyHandle;
-	FDelegateHandle OnConfigVarsBagPropertyNodeChangedHandle;
 };
 
 class FConfigVarsDataProvider : public IStructureDataProvider
@@ -312,65 +313,33 @@ private:
 	TSharedPtr<IPropertyHandle> StructProperty;
 };
 
-struct FConfigVarsViewModel : public TSharedFromThis<FConfigVarsViewModel>
+bool FConfigVarsFilter::IsStructAllowed(const FStructViewerInitializationOptions& InInitOptions, const UScriptStruct* InStruct, TSharedRef<FStructViewerFilterFuncs> InFilterFuncs)
 {
-	FConfigVarsViewModel(TSharedRef<IPropertyHandle> InPropertyHandle);
-	~FConfigVarsViewModel();
+	if (InStruct->IsA<UUserDefinedStruct>())
+	{
+		return bAllowUserDefinedStructs;
+	}
 
-	void Init();
-	TSharedRef<FConfigVarsDataProvider> GetConfigVarsDataProvider();
+	if (InStruct == BaseStruct)
+	{
+		return bAllowBaseStruct;
+	}
 
-	TSharedPtr<IPropertyHandle> PropertyHandle;
-	FStructView ConfigVarsDataCache;
+	if (InStruct->HasMetaData(TEXT("Hidden")))
+	{
+		return false;
+	}
 
-	//TArray<TSharedPtr<FConfigVarsBagHandle>> ConfigVarsBagHandles;
-
-	TWeakPtr<FConfigVarsDataProvider> ConfigVarsDataProvider;
-};
-
-FConfigVarsViewModel::FConfigVarsViewModel(TSharedRef<IPropertyHandle> InPropertyHandle)
-	: PropertyHandle(InPropertyHandle)
-	, ConfigVarsDataCache(nullptr)
-{
+	// Query the native struct to see if it has the correct parent type (if any)
+	return !BaseStruct || InStruct->IsChildOf(BaseStruct);
 }
 
-FConfigVarsViewModel::~FConfigVarsViewModel()
+bool FConfigVarsFilter::IsUnloadedStructAllowed(const FStructViewerInitializationOptions& InInitOptions, const FSoftObjectPath& InStructPath, TSharedRef<FStructViewerFilterFuncs> InFilterFuncs)
 {
+	// User Defined Structs don't support inheritance, so only include them requested
+	return bAllowUserDefinedStructs;
 }
-
-void FConfigVarsViewModel::Init()
-{
-	TArray<UPackage*> Packages;
-	PropertyHandle->GetOuterPackages(Packages);
-
-	//ConfigVarsBagHandles.Empty(Packages.Num());
-
-	PropertyHandle->EnumerateRawData([this, &Packages](void* RawData, const int32 DataIndex, const int32 /*NumDatas*/)
-		{
-			FConfigVarsBag* Bag = static_cast<FConfigVarsBag*>(RawData);
-			if (Bag)
-			{
-				if (ensureMsgf(Packages.IsValidIndex(DataIndex), TEXT("Expecting packges and raw data to match.")))
-				{
-					//TSharedRef<FConfigVarsBagHandle> ConfigVarsBagHandle = MakeShared<FConfigVarsBagHandle>(Bag->GetExportIndex(), Packages[DataIndex], PropertyHandle.ToSharedRef());
-					//ConfigVarsBagHandle->Init();
-
-					//ConfigVarsBagHandles.Add(ConfigVarsBagHandle);
-				}
-			}
-			return true;
-		});
-}
-
-TSharedRef<FConfigVarsDataProvider> FConfigVarsViewModel::GetConfigVarsDataProvider()
-{
-	TSharedRef<FConfigVarsDataProvider> ProviderRef = MakeShared<FConfigVarsDataProvider>(PropertyHandle);
-
-	ConfigVarsDataProvider = ProviderRef;
-
-	return ProviderRef;
-}
-////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
 
 FConfigVarsDetails::FConfigVarsDetails()
 {
@@ -387,70 +356,16 @@ TSharedRef<IPropertyTypeCustomization> FConfigVarsDetails::MakeInstance()
 	return Details;
 }
 
-void FConfigVarsDetails::CustomizeHeader(TSharedRef<IPropertyHandle> StructPropertyHandle, class FDetailWidgetRow& HeaderRow, IPropertyTypeCustomizationUtils& StructCustomizationUtils)
+void FConfigVarsDetails::CustomizeHeader(TSharedRef<IPropertyHandle> StructPropertyHandle, FDetailWidgetRow& HeaderRow, IPropertyTypeCustomizationUtils& StructCustomizationUtils)
 {
-	static const FName NAME_DataStruct = "DataStruct";
-	UScriptStruct* ConfigVarsDataStruct = nullptr;
-	{
-		const FString& DataStructName = StructPropertyHandle->GetMetaData(NAME_DataStruct);
-		if (!DataStructName.IsEmpty())
-		{
-			ConfigVarsDataStruct = UClass::TryFindTypeSlow<UScriptStruct>(DataStructName);
-			if (!ConfigVarsDataStruct)
-			{
-				ConfigVarsDataStruct = LoadObject<UScriptStruct>(nullptr, *DataStructName);
-			}
-		}
-	}
-
-	if (!ConfigVarsDataStruct)
-	{
-		return;
-	}
-
-	TArray<UObject*> OuterObjects;
-	//StructPropertyHandle->GetOuterPackages(Packages);
-	FConfigVarsDetailUtils::FindOuterObject(StructPropertyHandle, OuterObjects);
-
-	ViewModel = MakeShared<FConfigVarsViewModel>(StructPropertyHandle);
-
-	// 非事务，不允许撤回
-	FStructView ConfigVarsDataCache;
-	StructPropertyHandle->EnumerateRawData([&OuterObjects, &ConfigVarsDataCache, ConfigVarsDataStruct](void* RawData, const int32 DataIndex, const int32 /*NumDatas*/)
-	{
-		FConfigVarsBag* Bag = static_cast<FConfigVarsBag*>(RawData);
-		if (Bag)
-		{
-			if (ensureMsgf(OuterObjects.IsValidIndex(DataIndex), TEXT("Expecting packges and raw data to match.")))
-			{
-				if (OuterObjects[DataIndex]->HasAnyFlags(RF_ClassDefaultObject))
-				{
-					return false;
-				}
-
-				ConfigVarsDataCache = FConfigVarsDetailUtils::LoadOrAddData(OuterObjects[DataIndex], Bag, ConfigVarsDataStruct);
-			}
-		}
-		return true;
-	});
-
+	ViewModel = MakeShared<FConfigVarsViewModel>(StructPropertyHandle, StructCustomizationUtils);
 
 	ViewModel->Init();
-	ViewModel->ConfigVarsDataCache = ConfigVarsDataCache;
 
+	ViewModel->GenerateHeader(HeaderRow);
 
 	StructPropertyHandle->GetParentHandle()->SetOnPropertyValueChangedWithData(TDelegate<void(const FPropertyChangedEvent&)>::CreateSP(this, &FConfigVarsDetails::OnPropertyValueChangedWithData));
 	StructPropertyHandle->GetParentHandle()->SetOnChildPropertyValueChangedWithData(TDelegate<void(const FPropertyChangedEvent&)>::CreateSP(this, &FConfigVarsDetails::OnPropertyValueChangedWithData));
-
-	HeaderRow
-		.NameContent()
-		[
-			StructPropertyHandle->CreatePropertyNameWidget()
-		]
-		.ValueContent()
-		[
-			StructPropertyHandle->CreatePropertyValueWidget(false)
-		];
 }
 
 void FConfigVarsDetails::CustomizeChildren(TSharedRef<IPropertyHandle> StructPropertyHandle, class IDetailChildrenBuilder& StructBuilder, IPropertyTypeCustomizationUtils& StructCustomizationUtils)
@@ -460,9 +375,136 @@ void FConfigVarsDetails::CustomizeChildren(TSharedRef<IPropertyHandle> StructPro
 		return;
 	}
 
-	TSharedRef<FConfigVarsDataProvider> NewStructProvider = ViewModel->GetConfigVarsDataProvider();
+	ViewModel->GenerateChildren(StructBuilder);
+}
 
-	TArray<TSharedPtr<IPropertyHandle>> ChildProperties = StructPropertyHandle->AddChildStructure(NewStructProvider);
+void FConfigVarsDetails::OnPropertyValueChangedWithData(const FPropertyChangedEvent& ChangedEvent)
+{
+	
+}
+
+//////////////////////////////////////////////////////////////////////////
+
+FConfigVarsViewModel::FConfigVarsViewModel(TSharedRef<IPropertyHandle> InPropertyHandle, IPropertyTypeCustomizationUtils& StructCustomizationUtils)
+	: DataStruct(nullptr)
+	, PropertyHandle(InPropertyHandle)
+	, PropUtils(StructCustomizationUtils.GetPropertyUtilities())
+{
+}
+
+FConfigVarsViewModel::~FConfigVarsViewModel()
+{
+}
+
+void FConfigVarsViewModel::Init()
+{
+
+}
+
+void FConfigVarsViewModel::GenerateHeader(FDetailWidgetRow& HeaderRow)
+{
+	static const FName NAME_DataStruct = "DataStruct";
+	static const FName NAME_InheritedStruct = "InheritedDataStruct";
+
+	// DataStruct是否是明确的数据类型指向，如果不是，则允许FInstancedStruct一样的配置方式
+	bool bInheritedStruct = PropertyHandle->HasMetaData(NAME_InheritedStruct);
+
+	DataStruct = nullptr;
+	const FString& DataStructName = PropertyHandle->GetMetaData(NAME_DataStruct);
+	if (!DataStructName.IsEmpty())
+	{
+		DataStruct = UClass::TryFindTypeSlow<UScriptStruct>(DataStructName);
+		if (!DataStruct)
+		{
+			DataStruct = LoadObject<UScriptStruct>(nullptr, *DataStructName);
+		}
+	}
+
+
+	if (!DataStruct)
+	{
+		return;
+	}
+
+
+	TArray<UObject*> OuterObjects;
+	FConfigVarsDetailUtils::FindOuterObject(PropertyHandle.ToSharedRef(), OuterObjects);
+
+	if (bInheritedStruct)
+	{
+		HeaderRow
+		.NameContent()
+		[
+			PropertyHandle->CreatePropertyNameWidget()
+		]
+		.ValueContent()
+		.MinDesiredWidth(250.f)
+		.VAlign(VAlign_Center)
+		[
+			SAssignNew(ComboButton, SComboButton)
+			.OnGetMenuContent(this, &FConfigVarsViewModel::GenerateStructPicker)
+			.ContentPadding(0)
+			.IsEnabled(true)
+			.ButtonContent()
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				.Padding(0.0f, 0.0f, 4.0f, 0.0f)
+				[
+					SNew(SImage)
+					.Image(this, &FConfigVarsViewModel::GetDisplayValueIcon)
+				]
+				+ SHorizontalBox::Slot()
+				.VAlign(VAlign_Center)
+				[
+					SNew(STextBlock)
+					.Text(this, &FConfigVarsViewModel::GetDisplayValueString)
+					.ToolTipText(this, &FConfigVarsViewModel::GetTooltipText)
+					.Font(IDetailLayoutBuilder::GetDetailFont())
+				]
+			]
+		];
+	}
+	else
+	{
+		// 非事务，不允许撤回
+		FStructView ConfigVarsDataCache;
+		PropertyHandle->EnumerateRawData([&OuterObjects, &ConfigVarsDataCache, DataStruct = DataStruct](void* RawData, const int32 DataIndex, const int32 /*NumDatas*/)
+		{
+			FConfigVarsBag* Bag = static_cast<FConfigVarsBag*>(RawData);
+			if (Bag)
+			{
+				if (ensureMsgf(OuterObjects.IsValidIndex(DataIndex), TEXT("Expecting packges and raw data to match.")))
+				{
+					if (OuterObjects[DataIndex]->HasAnyFlags(RF_ClassDefaultObject))
+					{
+						return false;
+					}
+					ConfigVarsDataCache = FConfigVarsDetailUtils::LoadOrAddData(OuterObjects[DataIndex], Bag, DataStruct);
+				}
+			}
+			return true;
+		});
+
+		HeaderRow
+		.NameContent()
+		[
+			PropertyHandle->CreatePropertyNameWidget()
+		]
+		.ValueContent()
+		[
+			PropertyHandle->CreatePropertyValueWidget(false)
+		];
+	}
+}
+
+void FConfigVarsViewModel::GenerateChildren(class IDetailChildrenBuilder& StructBuilder)
+{
+	TSharedRef<FConfigVarsDataProvider> NewStructProvider = MakeShared<FConfigVarsDataProvider>(PropertyHandle);
+
+	TArray<TSharedPtr<IPropertyHandle>> ChildProperties = PropertyHandle->AddChildStructure(NewStructProvider);
 
 
 	for (TSharedPtr<IPropertyHandle> ChildHandle : ChildProperties)
@@ -471,9 +513,133 @@ void FConfigVarsDetails::CustomizeChildren(TSharedRef<IPropertyHandle> StructPro
 	}
 }
 
-void FConfigVarsDetails::OnPropertyValueChangedWithData(const FPropertyChangedEvent& ChangedEvent)
+TSharedRef<SWidget> FConfigVarsViewModel::GenerateStructPicker()
 {
-	check(ViewModel->ConfigVarsDataProvider.IsValid());
+	TSharedRef<FConfigVarsFilter> StructFilter = MakeShared<FConfigVarsFilter>();
+	StructFilter->BaseStruct = DataStruct;
+	StructFilter->bAllowUserDefinedStructs = false;
+	StructFilter->bAllowBaseStruct = true;
+
+	const UScriptStruct* SelectedStruct = nullptr;
+	const FPropertyAccess::Result Result = FConfigVarsDetailUtils::GetLastConfigVarsStruct(PropertyHandle.ToSharedRef(), SelectedStruct);
+
+	FStructViewerInitializationOptions Options;
+	Options.bShowNoneOption = true;
+	Options.StructFilter = StructFilter;
+	Options.NameTypeToDisplay = EStructViewerNameTypeToDisplay::DisplayName;
+	Options.DisplayMode = EStructViewerDisplayMode::ListView;
+	Options.bAllowViewOptions = true;
+	Options.SelectedStruct = SelectedStruct;
+
+	FOnStructPicked OnPicked(FOnStructPicked::CreateSP(this, &FConfigVarsViewModel::OnStructPicked));
+
+	return SNew(SBox)
+		.WidthOverride(280)
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.MaxHeight(500)
+			[
+				FModuleManager::LoadModuleChecked<FStructViewerModule>("StructViewer").CreateStructViewer(Options, OnPicked)
+			]
+		];
+}
+
+void FConfigVarsViewModel::OnStructPicked(const UScriptStruct* InStruct)
+{
+	if (PropertyHandle && PropertyHandle->IsValidHandle())
+	{
+		TArray<UObject*> OuterObjects;
+		FConfigVarsDetailUtils::FindOuterObject(PropertyHandle.ToSharedRef(), OuterObjects);
+
+		FScopedTransaction Transaction(LOCTEXT("OnStructPicked", "Set Struct"));
+
+		PropertyHandle->NotifyPreChange();
+
+		PropertyHandle->EnumerateRawData([InStruct, &OuterObjects](void* RawData, const int32 DataIndex, const int32 /*NumDatas*/)
+		{
+			FConfigVarsBag* Bag = static_cast<FConfigVarsBag*>(RawData);
+			if (Bag)
+			{
+				if (ensureMsgf(OuterObjects.IsValidIndex(DataIndex), TEXT("Expecting packges and raw data to match.")))
+				{
+					if (OuterObjects[DataIndex]->HasAnyFlags(RF_ClassDefaultObject))
+					{
+						return false;
+					}
+
+					if (InStruct == nullptr)
+					{
+						FConfigVarsDetailUtils::ImmediateRemoveData(OuterObjects[DataIndex], Bag);
+					}
+					FConfigVarsDetailUtils::LoadOrAddData(OuterObjects[DataIndex], Bag, InStruct);
+				}
+			}
+			return true;
+		});
+
+		PropertyHandle->NotifyPostChange(EPropertyChangeType::ValueSet);
+		PropertyHandle->NotifyFinishedChangingProperties();
+
+		// Property tree will be invalid after changing the struct type, force update.
+		if (PropUtils.IsValid())
+		{
+			PropUtils->ForceRefresh();
+		}
+	}
+
+	ComboButton->SetIsOpen(false);
+}
+
+FText FConfigVarsViewModel::GetDisplayValueString() const
+{
+	const UScriptStruct* SelectedStruct = nullptr;
+	const FPropertyAccess::Result Result = FConfigVarsDetailUtils::GetLastConfigVarsStruct(PropertyHandle.ToSharedRef(), SelectedStruct);
+
+	if (Result == FPropertyAccess::Success)
+	{
+		if (SelectedStruct)
+		{
+			return SelectedStruct->GetDisplayNameText();
+		}
+		return LOCTEXT("NullScriptStruct", "None");
+	}
+	if (Result == FPropertyAccess::MultipleValues)
+	{
+		return LOCTEXT("MultipleValues", "Multiple Values");
+	}
+
+	return FText::GetEmpty();
+}
+
+FText FConfigVarsViewModel::GetTooltipText() const
+{
+	const UScriptStruct* SelectedStruct = nullptr;
+	const FPropertyAccess::Result Result = FConfigVarsDetailUtils::GetLastConfigVarsStruct(PropertyHandle.ToSharedRef(), SelectedStruct);
+
+	if (SelectedStruct && Result == FPropertyAccess::Success)
+	{
+		return SelectedStruct->GetToolTipText();
+	}
+
+	return GetDisplayValueString();
+}
+
+const FSlateBrush* FConfigVarsViewModel::GetDisplayValueIcon() const
+{
+	static const FName NAME_ConfigVarsIcon = "ConfigVarsIcon";
+
+	const FString& ConfigVarsIcon = PropertyHandle->GetMetaData(NAME_ConfigVarsIcon);
+
+	if (!ConfigVarsIcon.IsEmpty())
+	{
+		return FSlateIconFinder::FindIcon(FName(ConfigVarsIcon)).GetIcon();
+	}
+	else
+	{
+		return FSlateIconFinder::FindIcon(NAME_ConfigVarsIcon).GetIcon();
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -90,14 +90,12 @@ public:
 };
 
 USTRUCT(BlueprintType)
-struct FVars_Nested2
+struct FVars_Nested_Child : public FVars_Nested
 {
 	GENERATED_BODY()
 public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly)
-	int32 Vars_Nested2_ID;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (DataStruct = "/Script/ConfigVars.Vars_Nested"))
-	FConfigVarsBag NestedData;
+	int32 Vars_Nested_Child_ID;
 };
 
 UCLASS(Blueprintable, BlueprintType)
@@ -105,6 +103,9 @@ class UConfigVarsTestData : public UDataAsset
 {
 	GENERATED_BODY()
 public:
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (DataStruct = "/Script/ConfigVars.Vars_Nested2"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (DataStruct = "/Script/ConfigVars.Vars_Nested"))
 	TArray<FConfigVarsBag> NestedDatas;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (InheritedDataStruct, DataStruct = "/Script/ConfigVars.Vars_Nested_Child"))
+	TArray<FConfigVarsBag> NestedDatas2;
 };

@@ -322,9 +322,6 @@ void UConfigVarsLinker::SerializeExportData(FStructuredArchive::FRecord Record)
 			// 第一次遍历，从TopOrderSet中剔除嵌套数据的Index
 			for (int32 OrderIndex : TopOrderSet)
 			{
-				EditorData->ExportDataDepthSet.Add(1);
-				EditorData->ExportDataOrderSet.Add(OrderIndex);
-				EditorData->ExportDataSerializeOrderSet.Add(OrderIndex);
 				VerifyNestedData(Ar, OrderIndex);
 			}
 
@@ -1010,6 +1007,12 @@ FStructView UConfigVarsLinker::LoadOrAddData(FConfigVarsBag& ConfigVarsBag, cons
 		if (ExportData.IsValidIndex(InOutExportIndex) && ExportData[InOutExportIndex].IsValid())
 		{
 			ExportDataOuter[InOutExportIndex] = Outermost;
+
+			if (TemplateDataStruct && ExportData[InOutExportIndex].GetScriptStruct() != TemplateDataStruct)
+			{
+				ExportData[InOutExportIndex].InitializeAs(TemplateDataStruct);
+			}
+
 			return ExportData[InOutExportIndex];
 		}
 
@@ -1049,6 +1052,12 @@ FStructView UConfigVarsLinker::LoadOrAddData(FConfigVarsBag& ConfigVarsBag, cons
 					EndLoad(LoadContext);
 
 					ExportDataOuter[InOutExportIndex] = Outermost;
+
+					if (TemplateDataStruct && ExportData[InOutExportIndex].GetScriptStruct() != TemplateDataStruct)
+					{
+						ExportData[InOutExportIndex].InitializeAs(TemplateDataStruct);
+					}
+
 					return ExportData[InOutExportIndex];
 				}
 			}
@@ -1103,9 +1112,21 @@ FStructView UConfigVarsLinker::LoadOrAddData(FConfigVarsBag& ConfigVarsBag, cons
 	return FStructView();
 }
 
+void UConfigVarsLinker::ImmediateRemoveData(struct FConfigVarsBag& ConfigVarsBag)
+{
+	if (ConfigVarsBag.ExportIndex >= 0)
+	{
+		ExportData[ConfigVarsBag.ExportIndex].Reset();
+		ExportDataOuter[ConfigVarsBag.ExportIndex] = nullptr;
+	}
+
+	MarkPendingRemoved(ConfigVarsBag.ExportIndex, true);
+	ConfigVarsBag.ExportIndex = INDEX_NONE;
+}
+
 void UConfigVarsLinker::MarkPendingRemoved(int32 ExportIndex, bool bIsPendingRemoved)
 {
-	if (GetLinkerEditorData())
+	if (GetLinkerEditorData() && ExportIndex >= 0)
 	{
 		if (bIsPendingRemoved)
 		{
@@ -1773,22 +1794,21 @@ void FConfigVarsUtils::VerifyNestedDataProperties(FArchive& Ar, UConfigVarsLinke
 
 			// 二级及以上的ConfigVars的ExportIndex都还未被映射
 
-			int32& ExportIndex = PRIVATE_GET_VAR(ConfigVarsBag, ExportIndex);
-			int32& OldIndex = ExportIndex;
-			// 更新适配了嵌套后的数据Depth和ExportIndex
+			int32 ExportIndex = PRIVATE_GET_VAR(ConfigVarsBag, ExportIndex);
+
+			// 更新适配了嵌套后的数据Depth和SerializeOrderExportIndex
+
+			EditorData->TopOrderSet.Remove(ExportIndex);
 
 			EditorData->ExportDataDepthSet.Add(Depth);
 			EditorData->ExportDataOrderSet.Add(ExportIndex);
 			EditorData->ExportDataSerializeOrderSet.Add(ExportIndex);
-			EditorData->TopOrderSet.Remove(ExportIndex);
 
-			ExportIndex = EditorData->ExportDataOrderSet.Num() - 1;
-
-			if (!Linker->ExportData.IsValidIndex(OldIndex) || !Linker->ExportData[OldIndex].IsValid())
+			if (!Linker->ExportData.IsValidIndex(ExportIndex) || !Linker->ExportData[ExportIndex].IsValid())
 			{
 				return;
 			}
-			VerifyNestedDataStruct(Ar, Linker, Linker->ExportData[OldIndex].GetScriptStruct(), Linker->ExportData[OldIndex].GetMutableMemory(), Depth);
+			VerifyNestedDataStruct(Ar, Linker, Linker->ExportData[ExportIndex].GetScriptStruct(), Linker->ExportData[ExportIndex].GetMutableMemory(), Depth);
 		}
 		else if (ScriptStruct->IsChildOf(FInstancedStruct::StaticStruct()))
 		{

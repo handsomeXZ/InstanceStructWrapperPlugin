@@ -147,6 +147,7 @@ private:
 
 #if WITH_EDITOR
 	FStructView LoadOrAddData(struct FConfigVarsBag& ConfigVarsBag, const UScriptStruct* TemplateDataStruct, UObject* Outermost);
+	void ImmediateRemoveData(struct FConfigVarsBag& ConfigVarsBag);
 	void MarkPendingRemoved(int32 ExportIndex, bool bIsPendingRemoved);
 	FLinkerLoad* CreateLinker_Sync();
 #endif

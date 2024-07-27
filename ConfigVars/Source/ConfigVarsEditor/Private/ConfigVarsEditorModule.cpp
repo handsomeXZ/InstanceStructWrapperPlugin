@@ -3,8 +3,12 @@
 #include "ConfigVarsEditorModule.h"
 
 #include "ConfigVarsDetails.h"
+#include "Interfaces/IPluginManager.h"
+#include "Styling/SlateStyleRegistry.h"
 
 #define LOCTEXT_NAMESPACE "FConfigVarsEditorModule"
+
+TSharedPtr<FSlateStyleSet> StyleSet = nullptr;
 
 void FConfigVarsEditorModule::StartupModule()
 {
@@ -13,6 +17,11 @@ void FConfigVarsEditorModule::StartupModule()
 	PropertyModule.RegisterCustomPropertyTypeLayout("ConfigVarsBag", FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FConfigVarsDetails::MakeInstance));
 	PropertyModule.NotifyCustomizationModuleChanged();
 
+	StyleSet = MakeShared<FSlateStyleSet>("ConfigVarsStyle");
+	const FString Path = IPluginManager::Get().FindPlugin("ConfigVars")->GetBaseDir()/ TEXT("Resources");
+	StyleSet->Set("ConfigVarsIcon", new FSlateImageBrush(Path/ "Icon128.png", FVector2D(16, 16)));
+
+	FSlateStyleRegistry::RegisterSlateStyle(*StyleSet.Get());
 }
 
 void FConfigVarsEditorModule::ShutdownModule()
@@ -24,6 +33,8 @@ void FConfigVarsEditorModule::ShutdownModule()
 		PropertyModule.UnregisterCustomPropertyTypeLayout("ConfigVarsBag");
 		PropertyModule.NotifyCustomizationModuleChanged();
 	}
+
+	FSlateStyleRegistry::UnRegisterSlateStyle(*StyleSet.Get());
 }
 
 #undef LOCTEXT_NAMESPACE

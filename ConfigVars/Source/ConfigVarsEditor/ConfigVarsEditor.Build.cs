@@ -59,6 +59,8 @@ public class ConfigVarsEditor : ModuleRules
 				// ... add private dependencies that you statically link with here ...	
                 "PropertyEditor",
                 "StructUtils",
+                "UnrealEd",
+                "Projects",
             }
 			);
 		
