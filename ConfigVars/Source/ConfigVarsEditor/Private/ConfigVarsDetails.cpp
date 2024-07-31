@@ -401,16 +401,84 @@ void FConfigVarsViewModel::Init()
 
 }
 
+const FString& FConfigVarsViewModel::GetMetaData(const FName& MetaName) const
+{
+	static const FName NAME_MetaFromOuter = "MetaFromOuter";
+	static const FString EmtpyMetaData;
+
+	if (!OuterObject.IsValid())
+	{
+		return EmtpyMetaData;
+	}
+
+	bool bMetaFromOuter = PropertyHandle->HasMetaData(NAME_MetaFromOuter);
+
+	if (bMetaFromOuter)
+	{
+		return OuterObject->GetClass()->GetMetaData(MetaName);
+	}
+	else
+	{
+		return PropertyHandle->GetMetaData(MetaName);
+	}
+
+}
+
+bool FConfigVarsViewModel::HasMetaData(const FName& MetaName) const
+{
+	static const FName NAME_MetaFromOuter = "MetaFromOuter";
+
+	if (!OuterObject.IsValid())
+	{
+		return false;
+	}
+
+	bool bMetaFromOuter = PropertyHandle->HasMetaData(NAME_MetaFromOuter);
+
+	if (bMetaFromOuter)
+	{
+		return OuterObject->GetClass()->HasMetaData(MetaName);
+	}
+	else
+	{
+		return PropertyHandle->HasMetaData(MetaName);
+	}
+}
+
 void FConfigVarsViewModel::GenerateHeader(FDetailWidgetRow& HeaderRow)
 {
+	TArray<UObject*> OuterObjects;
+	FConfigVarsDetailUtils::FindOuterObject(PropertyHandle.ToSharedRef(), OuterObjects);
+
+	/**
+	 * @TODO：暂时先不允许批量修改
+	 * 1. 边界条件未处理好
+	 * 2. MetaFromOuter不好处理
+	 */
+	if (OuterObjects.Num() > 1)
+	{
+		HeaderRow
+		.NameContent()
+		[
+			PropertyHandle->CreatePropertyNameWidget()
+		]
+		.ValueContent()
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("ConfigVarsValue", "Multiple Values"))
+			.Font(IDetailLayoutBuilder::GetDetailFont())
+		];
+	}
+
+	OuterObject = OuterObjects[0];
+	
 	static const FName NAME_DataStruct = "DataStruct";
 	static const FName NAME_InheritedStruct = "InheritedDataStruct";
 
 	// DataStruct是否是明确的数据类型指向，如果不是，则允许FInstancedStruct一样的配置方式
-	bool bInheritedStruct = PropertyHandle->HasMetaData(NAME_InheritedStruct);
+	bool bInheritedStruct = HasMetaData(NAME_InheritedStruct);
 
-	DataStruct = nullptr;
-	const FString& DataStructName = PropertyHandle->GetMetaData(NAME_DataStruct);
+	const FString& DataStructName = GetMetaData(NAME_DataStruct);
 	if (!DataStructName.IsEmpty())
 	{
 		DataStruct = UClass::TryFindTypeSlow<UScriptStruct>(DataStructName);
@@ -421,14 +489,22 @@ void FConfigVarsViewModel::GenerateHeader(FDetailWidgetRow& HeaderRow)
 	}
 
 
+	// 未配置Struct
 	if (!DataStruct)
 	{
+		HeaderRow
+		.NameContent()
+		[
+			PropertyHandle->CreatePropertyNameWidget()
+		]
+		.ValueContent()
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("ConfigVarsValue", "None"))
+			.Font(IDetailLayoutBuilder::GetDetailFont())
+		];
 		return;
 	}
-
-
-	TArray<UObject*> OuterObjects;
-	FConfigVarsDetailUtils::FindOuterObject(PropertyHandle.ToSharedRef(), OuterObjects);
 
 	if (bInheritedStruct)
 	{
@@ -630,7 +706,7 @@ const FSlateBrush* FConfigVarsViewModel::GetDisplayValueIcon() const
 {
 	static const FName NAME_ConfigVarsIcon = "ConfigVarsIcon";
 
-	const FString& ConfigVarsIcon = PropertyHandle->GetMetaData(NAME_ConfigVarsIcon);
+	const FString& ConfigVarsIcon = GetMetaData(NAME_ConfigVarsIcon);
 
 	if (!ConfigVarsIcon.IsEmpty())
 	{

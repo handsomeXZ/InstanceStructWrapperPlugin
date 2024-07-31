@@ -38,6 +38,9 @@ struct FConfigVarsViewModel : public TSharedFromThis<FConfigVarsViewModel>
 	void GenerateChildren(class IDetailChildrenBuilder& StructBuilder);
 
 protected:
+	const FString& GetMetaData(const FName& MetaName) const;
+	bool HasMetaData(const FName& MetaName) const;
+
 	TSharedRef<SWidget> GenerateStructPicker();
 	void OnStructPicked(const UScriptStruct* InStruct);
 	FText GetDisplayValueString() const;
@@ -49,6 +52,13 @@ protected:
 
 	TSharedPtr<SComboButton> ComboButton;
 	TSharedPtr<IPropertyUtilities> PropUtils;
+
+	/**
+	 * @TODO：暂时先不允许批量修改
+	 * 1. 边界条件未处理好
+	 * 2. MetaFromOuter不好处理
+	 */
+	 TWeakObjectPtr<UObject> OuterObject;
 };
 
 /**
